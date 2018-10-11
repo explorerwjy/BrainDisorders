@@ -9,6 +9,20 @@ import os
 import sys
 import seaborn as sns
 
+protein_coding_gene_file = "/Users/jiayao/Work/Resources/protein-coding_gene.txt"
+wigler_predicted_lgd = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-lgd.txt"
+wigler_predicted_male = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-male.txt"
+wigler_predicted_fem = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-fem.txt"
+
+def get_gene_entrez_symbol_map():
+    res = {}
+    reader = csv.reader(open(protein_coding_gene_file), delimiter="\t")
+    header = reader.next()
+    idx_symbol, idx_entrez_id = header.index("symbol"), header.index("entrez_id")
+    for row in reader:
+        res[row[idx_entrez_id]] = row[idx_symbol]
+    return res
+
 def PlotQQ(P, N=None):
     font = {'family' : 'normal',
         'weight' : 'normal',
@@ -113,35 +127,39 @@ def TemporalMap(age):
     num = float(num)
     if unit == 'pcw':
         if num >= 4 and num < 8:
-            return ("1", "Embryonic")
+            return ("1","1", "Embryonic")
         elif num >= 8 and num <10:
-            return ("2A", "Early prenatal")
+            return ("2A","2", "Early prenatal")
         elif num >= 10 and num <13:
-            return ("2B", "Early prenatal")
+            return ("2B", "3", "Early prenatal")
         elif num >= 13 and num <16:
-            return ("3A", "Early mid-prenatal")
+            return ("3A", "4", "Early mid-prenatal")
         elif num >= 16 and num <19:
-            return ("3B", "Early mid-prenatal")
+            return ("3B", "5", "Early mid-prenatal")
         elif num >= 19 and num <24:
-            return ("4", "Late mid-prenatal")
+            return ("4", "6", "Late mid-prenatal")
         elif num >= 24 and num <38:
-            return ("5", "Late prenatal")
+            return ("5", "7", "Late prenatal")
         else:
             print "Unexpected Value"
     elif unit == 'mos':
         if num>= 0 and num < 6:
-            return ("6", "Early infancy")
+            return ("6", "8", "Early infancy")
         elif num>= 6 and num < 12:
-            return ("7", "Late infancy")
+            return ("7", "9", "Late infancy")
     elif unit == 'yrs':
         if num >= 1 and num < 6:
-            return ("8", "Early childhood")
+            return ("8", "10", "Early childhood")
         elif num >= 6 and num < 12:
-            return ("9", "Late childhood")
-        elif num >= 12 and num < 19:
-            return ("10", "Adolescence")
-        elif num >= 19:
-            return ("11", "Adulthood")
+            return ("9", "11", "Late childhood")
+        elif num >= 12 and num < 20:
+            return ("10", "12", "Adolescence")
+        elif num >= 20 and num < 40:
+            return ("11", "13", "Young adulthood")
+        elif num >= 40 and num < 60:
+            return ("11", "14", "Young adulthood")
+        elif num >= 60:
+            return ("11", "15", "Young adulthood")
 
 def Insert(row, Dict):
     return Dict[row["Gene"]]
@@ -149,6 +167,7 @@ def Insert(row, Dict):
 # store all exp value at a developemt time point
 Stages = ["1", "2A", "2B", "3A", "3B"] + map(str,range(4,12))
 Stages = ["2A", "2B", "3A", "3B"] + map(str,range(4,12))
+#Stages = map(str,range(1,16))
 class DevStageExp:
     def __init__(self, DevStage):
         self.DevStage = DevStage
@@ -435,8 +454,31 @@ def AssignVar2Exon(bp_exon_row_meta, VarFile):
                 ##bp_exon_row_meta["Vars"].append(var["cDnaVariant"])
                 row["Vars"] = row["Vars"] + ";" + var["cDnaVariant"] 
                 bp_exon_row_meta.at[i, "Vars"] = bp_exon_row_meta.get_value(i, "Vars") + ";" + var["cDnaVariant"] 
-                #print row
-                #return
+                continue
+
+def AssignVar2Exon2(bp_exon_row_meta, VarFile):
+    VarDF = pd.read_excel(VarFile)
+    #print VarDF.head(2)
+    entrez_symbol_map = get_gene_entrez_symbol_map()
+    wigler_predicted_lgd_genes = [entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)]
+    #print wigler_predicted_lgd_genes
+    res = {} # k:gene v:list of variants in that gene
+    for i, row in VarDF.iterrows():
+        if row["effectGene"] not in res:
+            res[row["effectGene"]] = [row["location"]]
+        else:
+            res[row["effectGene"]].append(row["location"])
+    bp_exon_row_meta["Vars"] = ""
+    for i, row in bp_exon_row_meta.iterrows():
+        sys.stdout.write("\r{}".format(i))
+        start, end = int(row["start"]), int(row["end"])
+        if row["gene_symbol"] not in res:
+            continue
+        for var in res[row["gene_symbol"]]:
+            pos = int(var.split(":")[1])
+            #print pos
+            if pos >= start and pos <= end:
+                bp_exon_row_meta.at[i, "Vars"] = bp_exon_row_meta.get_value(i, "Vars") + ";" + var
                 continue
 
 def LookMutationTargetedExon(Gene, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, GeneDat=None, smooth=True, drop_low_exp=True, fontsize=6):
@@ -474,7 +516,7 @@ def LookMutationTargetedExon(Gene, structure_acronyms, bp_exon_row_meta, bp_exon
     for exon_id in exon_ids: 
         if res[exon_id] == None:
             continue
-        ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in res[exon_id]])
+        ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in res[exon_id]], label=exon_id)
     if GeneDat != None:# Plot Gene exp over stages 
         GeneExp, GeneRow, GeneCol = GeneDat
         Genes = GeneRow[GeneRow["gene_symbol"]==Gene]
@@ -498,9 +540,10 @@ def LookMutationTargetedExon(Gene, structure_acronyms, bp_exon_row_meta, bp_exon
         ax2 = ax.twinx()
         for gene_id in gene_ids:
             print res[gene_id]
-            ax2.plot(range(2,14), res[gene_id], color="black") 
+            ax2.plot(range(2,14), [math.log(x,2) if x !=0 else 0 for x in res[gene_id]], color="black") 
+            #ax2.plot(range(2,14), res[gene_id], color="black") 
         ax2.set_ylabel("GeneRPKM")
-
+    ax.legend()
     ax.grid(True)
     ax.axvline(x=7.5)
     #Stages = Stages + [0,0,0,0,0]
@@ -561,45 +604,50 @@ def LookMutationTargetedGene(Gene, structure_acronyms, bp_exon_row_meta, bp_exon
     ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
     plt.show()
 
-def LookALLMutationTargetedExon(structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True, fontsize=6):
-    Exons = bp_exon_row_meta
-    GeneExonExp = ExonExp[ExonExp[0].isin(list(Exons["row_num"]))]
-    #ID_start, ID_end = list(Exons["row_num"])[0], list(Exons["row_num"])[-1]
-    exon_ids = list(Exons["row_num"])
-    plt.close('all')
-    fig = plt.figure(dpi=800)
-    font = {'family' : 'normal',
-        'weight' : 'normal',
-        'size'   : fontsize}
-    mpl.rc('font', **font)
-    from mpl_toolkits.axes_grid1 import Grid
+def LoadingDat2SeqCrossRecordCrossRegion(record_ids, regions, row_meta, col_meta, Matrix, smooth=True, drop_low_exp=True):
+    lengths = []
     stages = {}
-    ExonLengths = []
-    for i, exon_id in enumerate(exon_ids):
-        sys.stdout.write("\r{}".format(i))
-        ExonLengths.append(bp_exon_row_meta.get_value(exon_id-1, "exon length"))
-        for j, structure_acronym in enumerate(structure_acronyms):
-            region_exon_meta = bp_exon_col_meta[bp_exon_col_meta["structure_acronym"]==structure_acronym]
-            for index, row in region_exon_meta.iterrows():
+    for i, _id in enumerate(record_ids):
+        sys.stdout.write("\rLoading records:{}".format(i))
+        lengths.append(row_meta.get_value(int(_id)-1, "exon length"))
+        for j, region in enumerate(regions):
+            region_col_meta = col_meta[col_meta["structure_acronym"]==region]
+            for index, row in region_col_meta.iterrows():
                 Period = row["Period"]
                 if Period not in stages:
                     stages[Period] = DevStageExp(Period)
-                stages[Period].add_exp(ExonExp.get_value(exon_id-1, row["column_num"]))
+                stages[Period].add_exp(Matrix.get_value(_id-1, row["column_num"]))
+    sys.stdout.write("\n")
     seq = DisplayStageExp(stages)[0]
     if smooth:
         seq = smooth_func(seq)
+    return seq, lengths
+
+def LookALLMutationTargetedExon(exon_ids, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True, fontsize=6, rd=False):
+    plt.close('all')
+    fig = plt.figure(dpi=800)
+    stages = {}
+    ExonLengths = []
+    seq, lengths = LoadingDat2SeqCrossRecordCrossRegion(exon_ids, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
     fig, ax = plt.subplots(dpi=200)
     plt.title("TargetedExons over Region:{}".format(",".join(structure_acronyms)))
-    ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq])
+    ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], label="TargetedExons")
     ax.grid(True)
     ax.axvline(x=7.5)
-    #Stages = Stages + [0,0,0,0,0]
+    if rd != False:
+        if rd == "gt1000":
+            rd_exon_ids = list(bp_exon_row_meta[bp_exon_row_meta["exon length"]>=1000].sample(len(exon_ids)*10)["row_num"])
+        if rd == "lt1000":
+            rd_exon_ids = list(bp_exon_row_meta[bp_exon_row_meta["exon length"]<1000].sample(len(exon_ids)*10)["row_num"])
+        rd_seq, rd_length = LoadingDat2SeqCrossRecordCrossRegion(rd_exon_ids,structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True)
+        ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in rd_seq], label="RandomExons")
     plt.xticks(np.arange(2,14), Stages, rotation=20)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+    ax.legend()
     plt.show()
     return ExonLengths
 
-def LookALLMutationTargetedGenes(Genes, structure_acronyms, GeneDat, smooth=True, drop_low_exp=True, fontsize=6):
+def LookALLMutationTargetedGenes(Genes, structure_acronyms, GeneDat, smooth=True, drop_low_exp=True, fontsize=6, ylim=None):
     GeneExp, GeneRow, GeneCol = GeneDat
     SelectedGenes = GeneRow[GeneRow["gene_symbol"].isin(Genes)]
     #GeneExonExp = ExonExp[ExonExp[0].isin(list(Exons["row_num"]))]
@@ -616,7 +664,8 @@ def LookALLMutationTargetedGenes(Genes, structure_acronyms, GeneDat, smooth=True
             #region_exon_meta = bp_exon_col_meta[bp_exon_col_meta["structure_acronym"]==structure_acronym]
             region_meta = GeneCol[GeneCol["structure_acronym"]==structure_acronym]
             for index, row in region_meta.iterrows():
-                Period = row["Period"]
+                #Period = row["Period"]
+                Period = row["Stage"]
                 if Period not in stages:
                     #stages[Period] = DevStageExp(Period)
                     stages[Period] = []
@@ -637,12 +686,16 @@ def LookALLMutationTargetedGenes(Genes, structure_acronyms, GeneDat, smooth=True
     fig, ax = plt.subplots(dpi=200)
     plt.title("TargetedExons over Region:{}".format(",".join(structure_acronyms)))
     #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq])
-    ax.plot(range(2,14),seq)
+    #ax.plot(range(2,14),seq)
+    #ax.plot(range(1,16),seq)
+    ax.plot(range(1,16),[math.log(x, 2) if x!=0 else 0 for x in seq])
     ax.grid(True)
     ax.axvline(x=7.5)
     #Stages = Stages + [0,0,0,0,0]
-    plt.xticks(np.arange(2,14), Stages, rotation=20)
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+    #plt.xticks(np.arange(2,14), Stages, rotation=20)
+    #ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+    if ylim != None:
+        plt.ylim(ylim)
     plt.show()
     
 
