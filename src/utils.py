@@ -13,6 +13,13 @@ protein_coding_gene_file = "/Users/jiayao/Work/Resources/protein-coding_gene.txt
 wigler_predicted_lgd = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-lgd.txt"
 wigler_predicted_male = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-male.txt"
 wigler_predicted_fem = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-fem.txt"
+wigler_fam_info = "/Users/jiayao/Work/BrainDisorders/nature13908-s2/Supplementary_Table_1.xlsx" #IQ in it
+
+# Entrez ID of genes in each category; No overlap
+vitkup_psd = "/Users/jiayao/Work/BrainDisorders/data/functions/asd-vitkup-snv-cnv-psd.txt"
+vitkup_sig_skel = "/Users/jiayao/Work/BrainDisorders/data/functions/asd-vitkup-snv-cnv-sig-skel.txt"
+vitkup_channel = "/Users/jiayao/Work/BrainDisorders/data/functions/asd-vitkup-snv-cnv-channel.txt"
+vitkup_chromatin = "/Users/jiayao/Work/BrainDisorders/data/functions/asd-vitkup-snv-cnv-chromatin.txt"
 
 def get_gene_entrez_symbol_map():
     res = {}
@@ -456,31 +463,84 @@ def AssignVar2Exon(bp_exon_row_meta, VarFile):
                 bp_exon_row_meta.at[i, "Vars"] = bp_exon_row_meta.get_value(i, "Vars") + ";" + var["cDnaVariant"] 
                 continue
 
+# Assign Category to a gene
+# Cates are dict of category:geneset
+def AssignFunc(gene, Cates): # Assign Category to each gene
+    res = []
+    for k,v in Cates.items():
+        if gene in v:
+            res.append(k)
+    return ";".join(res)
+#def GetIQ(gene, FamID):
+# Assign Variants to row meta data file of Exons. 
+# Markers on 1)Male vs. Female; 2)IQ70+ vs. IQ70- 3)Functions
 def AssignVar2Exon2(bp_exon_row_meta, VarFile):
     VarDF = pd.read_excel(VarFile)
-    #print VarDF.head(2)
+    # Load annotations to gene
     entrez_symbol_map = get_gene_entrez_symbol_map()
-    wigler_predicted_lgd_genes = [entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)]
-    #print wigler_predicted_lgd_genes
+    wigler_predicted_lgd_genes = set([entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)])
+    vitkup_channel_genes = set([entrez_symbol_map[x.strip()] for x in file(vitkup_channel)])
+    vitkup_chromatin_genes = set([entrez_symbol_map[x.strip()] for x in file(vitkup_chromatin)])
+    vitkup_psd_genes = set([entrez_symbol_map[x.strip()] for x in file(vitkup_psd)])
+    vitkup_sig_skel_genes = set([entrez_symbol_map[x.strip()] for x in file(vitkup_sig_skel)])
+    fam_info = pd.read_excel(wigler_fam_info)
+    famID2NVIQ = dict(zip(list(fam_info["familyId"]), list(fam_info["probandNVIQ"])))
+    famID2VIQ = dict(zip(list(fam_info["familyId"]), list(fam_info["probandVIQ"])))
+    
+    Cates = dict(zip(["channel", "chromatin", "psd", "sig_skel"],[vitkup_channel_genes,vitkup_chromatin_genes,vitkup_psd_genes,vitkup_sig_skel_genes]))
     res = {} # k:gene v:list of variants in that gene
+    var_genders = {}
+    var_IQ = {}
     for i, row in VarDF.iterrows():
-        if row["effectGene"] not in res:
-            res[row["effectGene"]] = [row["location"]]
+        if row["effectGene"] not in wigler_predicted_lgd_genes:
+            continue
+        # Get Variant Info
+        gene,var = row["effectGene"], row["location"]
+        if gene not in res:
+            res[gene] = [row["location"]]
         else:
-            res[row["effectGene"]].append(row["location"])
+            res[gene].append(row["location"])
+        # Get Gender Info
+        if var not in var_genders:
+            var_genders[var] = row["inChild"][:2]
+        else:
+            var_genders[var].append(row["inChild"][:2])
+        # Get IQ Info
+        if var not in var_IQ:
+            FamID = row["familyId"]
+            var_IQ[var] = (famID2VIQ[FamID],famID2NVIQ[FamID])
+    bp_exon_row_meta["NVIQ70"] = ""
+    bp_exon_row_meta["VIQ70"] = ""
+    bp_exon_row_meta["Gender"] = ""
+    bp_exon_row_meta["Func"] = ""
     bp_exon_row_meta["Vars"] = ""
+    bp_exon_row_meta["GeneHited"] = "F"
+    bp_exon_row_meta["Last"] = "F"
+    LAST_GENE = None
     for i, row in bp_exon_row_meta.iterrows():
         sys.stdout.write("\r{}".format(i))
-        start, end = int(row["start"]), int(row["end"])
-        if row["gene_symbol"] not in res:
+        gene = row["gene_symbol"]
+        if gene != LAST_GENE and gene != None:
+            bp_exon_row_meta.at[i-1, "Last"] = "T" 
+        LAST_GENE = gene
+        if gene not in res:
             continue
-        for var in res[row["gene_symbol"]]:
+        bp_exon_row_meta.at[i, "GeneHited"] = "T"
+        start, end = int(row["start"]), int(row["end"])
+        gene = row["gene_symbol"]
+        # Assign Variant to Exon
+        for var in res[gene]:
             pos = int(var.split(":")[1])
             #print pos
-            if pos >= start and pos <= end:
-                bp_exon_row_meta.at[i, "Vars"] = bp_exon_row_meta.get_value(i, "Vars") + ";" + var
+            if pos >= start and pos <= end: #Var In This Exon
+                bp_exon_row_meta.at[i, "Vars"] = bp_exon_row_meta.get_value(i, "Vars") + ";" + var if bp_exon_row_meta.get_value(i, "Vars") != "" else var
+                bp_exon_row_meta.at[i, "VIQ70"] = var_IQ[var][0]
+                bp_exon_row_meta.at[i, "NVIQ70"] = var_IQ[var][1]
+                bp_exon_row_meta.at[i, "Gender"] = bp_exon_row_meta.get_value(i, "Gender") + ";" + var_genders[var] if bp_exon_row_meta.get_value(i, "Gender") != "" else var_genders[var]
                 continue
-
+        # Assign Other Info
+        bp_exon_row_meta.at[i, "Func"] = AssignFunc(gene, Cates)
+    bp_exon_row_meta.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
 def LookMutationTargetedExon(Gene, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, GeneDat=None, smooth=True, drop_low_exp=True, fontsize=6):
     Exons = bp_exon_row_meta[bp_exon_row_meta["gene_symbol"]==Gene]
     GeneExonExp = ExonExp[ExonExp[0].isin(list(Exons["row_num"]))]
@@ -646,6 +706,29 @@ def LookALLMutationTargetedExon(exon_ids, structure_acronyms, bp_exon_row_meta, 
     ax.legend()
     plt.show()
     return ExonLengths
+
+def LookALLMutationTargetedExon2(exon_ids_sets, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True, fontsize=6, rd=False):
+    plt.close('all')
+    fig = plt.figure(dpi=800)
+    stages = {}
+    fig, ax = plt.subplots(dpi=200)
+    plt.title("Exons Exp over Region:{}".format(",".join(structure_acronyms)))
+    for SetName, (color, ExonIDs) in exon_ids_sets.items():
+        print SetName
+        ExonIDs = [int(x) for x in ExonIDs]
+        seq, lengths = LoadingDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
+        if "Other" in SetName:
+            ax.plot(range(2,14),seq, '--', label=SetName, color=color)
+            #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], '--', label=SetName, color=color)
+        else:
+            ax.plot(range(2,14),seq, label=SetName, color=color)
+            #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], label=SetName, color=color)
+    ax.grid(True)
+    ax.axvline(x=7.5)
+    plt.xticks(np.arange(2,14), Stages, rotation=20)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+    ax.legend()
+    plt.show()
 
 def LookALLMutationTargetedGenes(Genes, structure_acronyms, GeneDat, smooth=True, drop_low_exp=True, fontsize=6, ylim=None):
     GeneExp, GeneRow, GeneCol = GeneDat
