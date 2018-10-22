@@ -186,8 +186,6 @@ class BrainSpan:
                 return ("11", "14", "Young adulthood")
             elif num >= 60:
                 return ("11", "15", "Young adulthood")
-    def Insert(self, row, Dict):
-        return Dict[row["Gene"]]
     # Return res1: sequence of exp in 12 dev stages res2: num of samples at each timepoint
     def DisplayStageExp(self, Dict, out="nonzero"):
         res1 = []
@@ -360,13 +358,13 @@ class BrainSpan:
             try:
                 new.append(sum(nonzero)/len(nonzero))
             except ZeroDivisionError:
-                print "Three 0 data at stage",i
+                #print "Three 0 data at stage",i
                 new.append(0)
             i += 1
         return new
     def format_func(self, value, tick_number):
         try:
-            return Stages[int(value)-2]
+            return self.Stages[int(value)-2]
         except:
             #print value
             return 0
@@ -399,13 +397,13 @@ class BrainSpan:
                         stages[Period] = DevStageExp(Period)
                     stages[Period].add_exp(GeneExonExp.get_value(exon_id-1, row["column_num"]))
             #res[exon_id]
-            seq = DisplayStageExp(stages)[0]
+            seq = self.DisplayStageExp(stages)[0]
             if drop_low_exp:
                 if seq.count(0) >= 4:
                     res[exon_id] = None
                     continue
             if smooth:
-                res[exon_id] = smooth_func(seq)
+                res[exon_id] = self.smooth_func(seq)
             else:
                 res[exon_id] = seq
 
@@ -422,8 +420,61 @@ class BrainSpan:
         ax.grid(True)
         ax.axvline(x=7.5)
         #Stages = Stages + [0,0,0,0,0]
-        plt.xticks(np.arange(2,14), Stages, rotation=20)
-        ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+        plt.xticks(np.arange(2,14), self.Stages, rotation=20)
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(self.format_func))
+        plt.show()
+    def LookGeneExonSumOverRegionwithTargetUntarget(self, Gene, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, GeneDat=None, smooth=True, drop_low_exp=True, fontsize=6):
+        Exons = bp_exon_row_meta[bp_exon_row_meta["gene_symbol"]==Gene]
+        TargetedExons = Exons[Exons["Vars"]!=""]
+        UnTargetedExons = Exons[Exons["Vars"]==""]
+        #print TargetedExons
+        plt.close('all')
+        fig, ax = plt.subplots(dpi=100)
+        plt.title("Gene:{} over Region:{}".format(Gene, ",".join(structure_acronyms)))
+        res = {}
+        
+        for exon_id in list(TargetedExons["row_num"]):
+            exon_id = int(exon_id)
+            seq = self.LoadingDat2SeqCrossRecordCrossRegion([exon_id], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True)
+            ax.plot(range(2,14), seq, label=str(exon_id))
+        for exon_id in list(UnTargetedExons["row_num"]):
+            exon_id = int(exon_id)
+            seq = self.LoadingDat2SeqCrossRecordCrossRegion([exon_id], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, shutup=True)
+            ax.plot(range(2,14), seq, '--', alpha = 0.3, color='grey') 
+        if GeneDat != None:# Plot Gene exp over stages 
+            stages = {}
+            GeneExp, GeneRow, GeneCol = GeneDat
+            Genes = GeneRow[GeneRow["gene_symbol"]==Gene]
+            Gene = GeneExp[GeneExp[0].isin(list(Genes["row_num"]))]
+            gene_ids = list(Genes["row_num"])
+            for gene_id in gene_ids:
+                for j, structure_acronym in enumerate(structure_acronyms): # sum over structures/regions
+                    region_meta = GeneCol[GeneCol["structure_acronym"]==structure_acronym]
+                    for index, row in region_meta.iterrows():
+                        Period = row["Period"]
+                        if Period not in stages:
+                            stages[Period] = DevStageExp(Period)
+                        stages[Period].add_exp(GeneExp.get_value(gene_id-1, row["column_num"]))
+                seq, Nsample = self.DisplayStageExp(stages)
+                print seq
+                if smooth:
+                    res[gene_id] = self.smooth_func(seq)
+                else:
+                    res[gene_id] = seq
+            #add_layout(LinearAxis(y_range_name="GeneRPKM"), 'right')
+            ax2 = ax.twinx()
+            for gene_id in gene_ids:
+                #print res[gene_id]
+                #ax2.plot(range(2,14), [math.log(x,2) if x !=0 else 0 for x in res[gene_id]], color="black") 
+                ax2.plot(range(2,14), res[gene_id], color="black") 
+            ax2.set_ylabel("GeneRPKM")
+        ax.grid(True)
+        ax.axvline(x=7.5)
+        #Stages = Stages + [0,0,0,0,0]
+        plt.xticks(np.arange(2,14), self.Stages, rotation=20)
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(self.format_func))
+        plt.legend()
+        ax.legend()
         plt.show()
     def NoiseEstimate():
         pass
@@ -460,7 +511,6 @@ class BrainSpan:
             if gene in v:
                 res.append(k)
         return ";".join(res)
-    #def GetIQ(gene, FamID):
     # Assign Variants to row meta data file of Exons. 
     # Markers on 1)Male vs. Female; 2)IQ70+ vs. IQ70- 3)Functions
     def AssignVar2Exon2(self, bp_exon_row_meta, VarFile):
@@ -651,7 +701,7 @@ class BrainSpan:
         plt.xticks(np.arange(2,14), Stages, rotation=20)
         ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
         plt.show()
-    def LoadingDat2SeqCrossRecordCrossRegion(self, record_ids, regions, row_meta, col_meta, Matrix, smooth=True, drop_low_exp=True):
+    def LoadingDat2SeqWithLenCrossRecordCrossRegion(self, record_ids, regions, row_meta, col_meta, Matrix, smooth=True, drop_low_exp=True):
         lengths = []
         stages = {}
         for i, _id in enumerate(record_ids):
@@ -669,6 +719,85 @@ class BrainSpan:
         if smooth:
             seq = self.smooth_func(seq)
         return seq, lengths
+    def LoadingNormDat2SeqCrossRecordCrossRegion(self, record_ids, regions, row_meta, col_meta, Matrix, smooth=True, drop_low_exp=True):
+        res = {}
+        ALL_RPKM_X_L = [0]*13 # by Timepoint
+        ALL_L = 0
+        Numrecords = len(record_ids)
+        for i, _id in enumerate(record_ids):
+            sys.stdout.write("\rLoading records:{}".format(i))
+            #lengths.append(row_meta.get_value(int(_id)-1, "exon length"))
+            exonL = int(row_meta.get_value(int(_id)-1, "exon length"))
+            stages = {} #Exom RPKM at each stage
+            for j, region in enumerate(regions):
+                region_col_meta = col_meta[col_meta["structure_acronym"]==region]
+                for index, row in region_col_meta.iterrows():
+                    Period = row["Period"]
+                    if Period not in stages:
+                        stages[Period] = DevStageExp(Period)
+                    stages[Period].add_exp(Matrix.get_value(_id-1, row["column_num"]))
+            seq = self.DisplayStageExp(stages)[0]
+            if drop_low_exp:
+                if seq.count(0) >= 4:
+                    print _id
+                    Numrecords -= 1
+                    continue
+            #print seq
+            res[_id] = self.smooth_func(seq) if smooth else seq
+            ALL_RPKM_X_L = [x+(y*exonL) for x,y in zip(ALL_RPKM_X_L, res[_id])]
+            ALL_L += exonL
+            #print ALL_RPKM_X_L, ALL_L
+        records_mean = []
+        records_mean_norm = []
+        denominators = []
+        for i, stage in enumerate(self.Stages):
+            tmp1 = 0
+            tmp2 = 0
+            denominator = ALL_RPKM_X_L[i] / ALL_L
+            denominators.append(denominator)
+            expsi = []
+            for j, _id in enumerate(record_ids):
+                if _id in res:
+                    #pprint stage, res[_id][i]
+                    tmp1 += res[_id][i]
+                    res[_id][i] = res[_id][i] / denominator
+                    tmp2 += res[_id][i]
+                    expsi.append(res[_id][i])
+            print np.var(expsi),
+            records_mean.append(tmp1/Numrecords)
+            records_mean_norm.append(tmp2/Numrecords)
+            print
+        print records_mean, records_mean_norm, denominators
+        plt.close('all')
+        fig, ax = plt.subplots()
+        ax.plot(xrange(2,14), records_mean, label='avg')
+        ax.plot(xrange(2,14), denominators, label='norm term')
+        ax2 = ax.twinx()
+        ax2.plot(xrange(2,14), records_mean_norm, label='avg_nromed')
+        ax.legend()
+        ax2.legend()
+        plt.show()
+        sys.stdout.write("\n")
+        print records_mean 
+        return records_mean 
+    def LoadingDat2SeqCrossRecordCrossRegion(self, record_ids, regions, row_meta, col_meta, Matrix, smooth=True, drop_low_exp=True, shutup=True):
+        stages = {}
+        for i, _id in enumerate(record_ids):
+            if not shutup:
+                sys.stdout.write("\rLoading records:{}".format(i))
+            for j, region in enumerate(regions):
+                region_col_meta = col_meta[col_meta["structure_acronym"]==region]
+                for index, row in region_col_meta.iterrows():
+                    Period = row["Period"]
+                    if Period not in stages:
+                        stages[Period] = DevStageExp(Period)
+                    stages[Period].add_exp(Matrix.get_value(_id-1, row["column_num"]))
+        if not shutup:
+            sys.stdout.write("\n")
+        seq = self.DisplayStageExp(stages)[0]
+        if smooth:
+            seq = self.smooth_func(seq)
+        return seq 
     def LookALLMutationTargetedExon2(self, exon_ids, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True, fontsize=6, rd=False):
         plt.close('all')
         fig = plt.figure(dpi=800)
@@ -701,7 +830,7 @@ class BrainSpan:
         for SetName, (color, ExonIDs) in exon_ids_sets.items():
             print SetName
             ExonIDs = [int(x) for x in ExonIDs]
-            seq, lengths = self.LoadingDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
+            seq = self.LoadingDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
             if "Other" in SetName:
                 ax.plot(range(2,14),seq, '--', label=SetName, color=color)
                 #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], '--', label=SetName, color=color)
@@ -714,53 +843,54 @@ class BrainSpan:
         ax.xaxis.set_major_formatter(plt.FuncFormatter(self.format_func))
         ax.legend()
         plt.show()
-    def LookALLMutationTargetedGenes(self, Genes, structure_acronyms, GeneDat, smooth=True, drop_low_exp=True, fontsize=6, ylim=None):
-        GeneExp, GeneRow, GeneCol = GeneDat
-        SelectedGenes = GeneRow[GeneRow["gene_symbol"].isin(Genes)]
-        #GeneExonExp = ExonExp[ExonExp[0].isin(list(Exons["row_num"]))]
-        gene_ids = list(SelectedGenes["row_num"])
+    # with Nromlization within exon sets.
+    def ReadExonExpValuesEachTimePointAvgAcrossRegion(self, exon_ids, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True):
+        res = {}
+        for ExonID in exon_ids:
+            seq = self.LoadingDat2SeqCrossRecordCrossRegion([ExonID], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
+            res[ExonID] = seq
+        return res
+    def LookALLMutationTargetedExon3(self, exon_ids_sets, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True, fontsize=6, rd=False):
         plt.close('all')
         fig = plt.figure(dpi=800)
-        font = {'family' : 'normal',
-            'weight' : 'normal',
-            'size'   : fontsize}
-        mpl.rc('font', **font)
         stages = {}
-        for gene_id in gene_ids:
-            for structure_acronym in structure_acronyms:
-                #region_exon_meta = bp_exon_col_meta[bp_exon_col_meta["structure_acronym"]==structure_acronym]
-                region_meta = GeneCol[GeneCol["structure_acronym"]==structure_acronym]
-                for index, row in region_meta.iterrows():
-                    #Period = row["Period"]
-                    Period = row["Stage"]
-                    if Period not in stages:
-                        #stages[Period] = DevStageExp(Period)
-                        stages[Period] = []
-                    #stages[Period].add_exp(ExonExp.get_value(exon_id-1, row["column_num"]))
-                    stages[Period].append(GeneExp.get_value(gene_id-1, row["column_num"]))
-            #res[exon_id]
-        #seq = DisplayStageExp(stages, out="all")[0]
-        seq = []
-        for stage in Stages:
-            try:
-                seq.append(np.mean(stages[stage]))
-            except:
-                print stage
-                seq.append(0)
-                #seq.append(0)
-        if smooth:
-            seq = smooth_func(seq)
         fig, ax = plt.subplots(dpi=200)
-        plt.title("TargetedExons over Region:{}".format(",".join(structure_acronyms)))
-        #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq])
-        #ax.plot(range(2,14),seq)
-        #ax.plot(range(1,16),seq)
-        ax.plot(range(1,16),[math.log(x, 2) if x!=0 else 0 for x in seq])
+        plt.title("Exons Exp over Region:{}".format(",".join(structure_acronyms)))
+        for SetName, (color, ExonIDs) in exon_ids_sets.items():
+            print SetName
+            ExonIDs = [int(x) for x in ExonIDs]
+            seq = self.LoadingNormDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
+            if "Other" in SetName:
+                ax.plot(range(2,14), seq, '--', label=SetName, color=color)
+                #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], '--', label=SetName, color=color)
+            else:
+                ax.plot(range(2,14), seq, label=SetName, color=color)
+                #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], label=SetName, color=color)
         ax.grid(True)
         ax.axvline(x=7.5)
-        #Stages = Stages + [0,0,0,0,0]
+        plt.xticks(np.arange(2,14), self.Stages, rotation=20)
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(self.format_func))
+        ax.legend()
+        plt.show()
+
+    def LookALLMutationTargetedGenes(self, Gene_id_sets, structure_acronyms, GeneDat, smooth=True, drop_low_exp=True, fontsize=6, ylim=None):
+        plt.close('all')
+        GeneExp, GeneRow, GeneCol = GeneDat
+        plt.close('all')
+        stages = {}
+        fig, ax = plt.subplots(dpi=200)
+        plt.title("TargetedExons over Region:{}".format(",".join(structure_acronyms)))
+        for SetName, (color, GeneIDs) in Gene_id_sets.items():
+            print SetName
+            GeneIDs = [int(x) for x in GeneIDs]
+            seq = self.LoadingDat2SeqCrossRecordCrossRegion(GeneIDs, structure_acronyms, GeneCol, GeneCol, GeneExp, smooth=True) # Loading data needed
+            #ax.plot(range(1,16),[math.log(x, 2) if x!=0 else 0 for x in seq])
+            ax.plot(range(2,14), seq, label=SetName, color=color)
+        ax.grid(True)
+        ax.axvline(x=7.5)
+        plt.legend()
         #plt.xticks(np.arange(2,14), Stages, rotation=20)
-        #ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(self.format_func))
         if ylim != None:
             plt.ylim(ylim)
         plt.show()
