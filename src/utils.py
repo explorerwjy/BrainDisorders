@@ -156,6 +156,8 @@ class BrainSpan:
         #Stages = map(str,range(1,16))
         #self.Stages = ["1", "2A", "2B", "3A", "3B"] + map(str,range(4,12))
         self.Stages = ["2A", "2B", "3A", "3B"] + map(str,range(4,12))
+        self.Regions = []
+        self.Regionsgt20 = ['OFC', 'VFC', 'HIP', 'ITC', 'AMY', 'DFC', 'STC', 'MFC', 'STR', 'IPC', 'V1C', 'S1C', 'A1C', 'M1C', 'CBC', 'MD']
     def TemporalMap(self, age):
         num, unit = age.split()
         num = float(num)
@@ -450,11 +452,11 @@ class BrainSpan:
         
         for exon_id in list(TargetedExons["row_num"]):
             exon_id = int(exon_id)
-            seq = self.LoadingDat2SeqCrossRecordCrossRegion([exon_id], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True)
+            seq, error_var, median = self.LoadingDat2SeqCrossRecordCrossRegion([exon_id], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True)
             ax.plot(range(2,14), seq, label=str(exon_id))
         for exon_id in list(UnTargetedExons["row_num"]):
             exon_id = int(exon_id)
-            seq = self.LoadingDat2SeqCrossRecordCrossRegion([exon_id], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, shutup=True)
+            seq, error_var, median = self.LoadingDat2SeqCrossRecordCrossRegion([exon_id], structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, shutup=True)
             ax.plot(range(2,14), seq, '--', alpha = 0.3, color='grey') 
         if GeneDat != None:# Plot Gene exp over stages 
             stages = {}
@@ -470,19 +472,20 @@ class BrainSpan:
                         if Period not in stages:
                             stages[Period] = DevStageExp(Period)
                         stages[Period].add_exp(GeneExp.get_value(gene_id-1, row["column_num"]))
-                seq, Nsample = self.DisplayStageExp(stages)
-                print seq
+                seq, Nsample, median, var = self.DisplayStageExp(stages)
+                #print seq
                 if smooth:
                     res[gene_id] = self.smooth_func(seq)
                 else:
                     res[gene_id] = seq
             #add_layout(LinearAxis(y_range_name="GeneRPKM"), 'right')
-            ax2 = ax.twinx()
+            #ax2 = ax.twinx()
             for gene_id in gene_ids:
                 #print res[gene_id]
                 #ax2.plot(range(2,14), [math.log(x,2) if x !=0 else 0 for x in res[gene_id]], color="black") 
-                ax2.plot(range(2,14), res[gene_id], color="black") 
-            ax2.set_ylabel("GeneRPKM")
+                #ax2.plot(range(2,14), res[gene_id], color="black") 
+                ax.plot(range(2,14), res[gene_id], color="black") 
+            #ax2.set_ylabel("GeneRPKM")
         ax.grid(True)
         ax.axvline(x=7.5)
         #Stages = Stages + [0,0,0,0,0]
@@ -860,6 +863,7 @@ class BrainSpan:
             print SetName
             ExonIDs = [int(x) for x in ExonIDs]
             seq, error_var, median = self.LoadingDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, shutup=False) # Loading data needed
+            #seq = [math.log(x, 10) for x in seq]
             if "Other" in SetName:
                 #ax.plot(range(2,14),seq, '--', label=SetName, color=color)
                 #ax.plot(range(2,14),median, '--', label=SetName, color=color)
@@ -893,6 +897,7 @@ class BrainSpan:
             print SetName
             ExonIDs = [int(x) for x in ExonIDs]
             seq = self.LoadingNormDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
+            seq = [math.log(x,10) for x in seq]
             if "Other" in SetName:
                 ax.plot(range(2,14), seq, '--', label=SetName, color=color)
                 #ax.plot(range(2,14),[math.log(x, 2) if x!=0 else 0 for x in seq], '--', label=SetName, color=color)
@@ -1146,3 +1151,217 @@ class HBT_DATA:
                 return np.mean(self.non_zero), np.var(self.non_zero), np.median(self.non_zero_exps)
             except ZeroDivisionError:
                 return 0, 0, 0
+
+from sklearn import datasets, linear_model
+from sklearn.metrics import mean_squared_error, r2_score
+import scipy
+import random
+import bisect
+import collections
+class PredictIQFromExon:
+    def __init__(self, VarFil, FamINFO, matrix):
+        self.matrix = matrix
+        self.df_var = pd.read_excel(VarFil)
+        self.df_fam = pd.read_excel(FamINFO)
+    def sameExon(self, var1, var2, gene, row_meta):
+        gene_df = row_meta[row_meta["gene_symbol"]==gene]
+        pos_1 = int(var1.split(":")[1])
+        pos_2 = int(var2.split(":")[1])
+        exon_1, exon_2 = None, None
+        for i, row in gene_df.iterrows():
+            start = int(row["start"]) - 2
+            end = int(row["end"]) + 2
+            if pos_1 >= start and pos_1 <= end:
+                exon_1 = i
+            if pos_2 >= start and pos_2 <= end:
+                exon_2 = i
+        return (exon_1 == exon_2) and (exon_1 != None) and (exon_2 != None)
+    def get_exon_id(self, var, gene, row_meta):
+        gene_df = row_meta[row_meta["gene_symbol"]==gene]
+        pos = int(var.split(":")[1])
+        for i, row in gene_df.iterrows():
+            start = int(row["start"]) - 2
+            end = int(row["end"]) + 2
+            if pos >= start and pos <= end:
+                return i
+        return None
+    def isLastExon(self, exon_id, row_meta):
+        gene = row_meta.get_value(exon_id, "gene_symbol")
+        next_gene = row_meta.get_value(exon_id+1, "gene_symbol")
+        return not (gene == next_gene)
+        def cdf(self, weights):
+            total = sum(weights)
+            result = []
+            cumsum = 0
+            for w in weights:
+                cumsum += w
+                result.append(cumsum / total)
+            return result
+    def choice(self, population, weights):
+        assert len(population) == len(weights)
+        cdf_vals = cdf(weights)
+        x = random.random()
+        idx = bisect.bisect(cdf_vals, x)
+        return population[idx]
+    def GetExonProb(self, exon_df):
+        Total_length = sum(exon_df["exon length"].values)
+        Probs = [float(x)/Total_length for x in exon_df["exon length"].values]
+        return exon_df.index.values, Probs
+    def avgseq(self, seq, start, end):
+        return np.mean(seq[start: end])
+    def getIQ(self, famID, which="probandNVIQ"):
+        return float(self.df_fam[self.df_fam["familyId"] == famID][which].values[0])
+    def regGene(self, dat):
+        regr = linear_model.LinearRegression(fit_intercept=False)
+        X_train = np.array([[x[4]] for x in dat])
+        y_train = np.array([x[3] for x in dat])
+        regr.fit(X_train, y_train)
+        return regr
+    def regGene2(self, X, Y):
+        regr = linear_model.LinearRegression(fit_intercept=False)
+        X = X.reshape(-1,1)
+        regr.fit(X, Y)
+        return regr
+    def plotGene(self, gene, regr, dat):
+        X_train = np.array([[x[4]] for x in dat])
+        y_train = np.array([x[3] for x in dat])
+        y_pred = regr.predict(X_train)
+        #print('Coefficients:', regr.coef_)
+        R, P = scipy.stats.pearsonr([x[0] for x in X_train], y_train)
+        plt.title("Gene:{}, R:{}, P:{}".format(gene, R,P))
+        plt.xlim(0,3)
+        plt.ylim(0, max(y_train+y_pred))
+        plt.scatter(X_train, y_train,  color='black')
+        plt.plot(np.append(X_train, [0]), np.append(y_pred, 0), color='blue', linewidth=3)
+        plt.show()
+    def model(self, df_row, var2leave = None, plot=True):
+        self.gene2slope = {}
+        ALL_Exp = np.array([])
+        ALL_Normed_IQD = np.array([])
+        Genes = list(set(self.df_var["effectGene"].values))
+        for gene in Genes:
+            tmp_df = self.df_var[self.df_var["effectGene"]==gene]
+            famids = tmp_df["familyId"].values
+            varids = tmp_df["location"].values
+            if var2leave != None:
+                varids = [x for x in varids if x!=var2leave]
+            exonids = [self.get_exon_id(x, gene, df_row) for x in varids]
+            exonids = [x for x in exonids if x != None]
+            #print exonids
+            exonids = [x for x in exonids if not self.isLastExon(x, df_row)]
+            exps = []
+            for exonid in exonids:
+                seq = self.matrix.iloc[exonid-1, 0:12].values
+                #print seq
+                exp = self.avgseq(seq, 0, 12) / 10
+                exps.append(exp)
+            IQs = [max(0, (100-self.getIQ(x))) for x in famids]
+            #exonids = [x for x in exonids if x!=None]
+            dat = zip(famids, varids, exonids, IQs, exps)
+            dat = [x for x in dat if x[2]!= None]
+            exps = np.array([[x[4]] for x in dat])
+            IQDs = np.array([x[3] for x in dat])
+            if dat == []:
+                continue
+            regr = self.regGene(dat)
+            slope = regr.coef_[0]
+            if slope == 0:
+                continue
+            self.gene2slope[gene] = slope
+            ALL_Exp = np.append(ALL_Exp, exps)
+            NormIQDs = np.array([x[3]/slope for x in dat])
+            ALL_Normed_IQD = np.append(ALL_Normed_IQD, NormIQDs)
+        model = linear_model.LinearRegression(fit_intercept=False)
+        ALL_Exp = ALL_Exp.reshape(-1,1)
+        R, P = scipy.stats.pearsonr([x[0] for x in ALL_Exp], ALL_Normed_IQD)
+        if plot:
+            plt.title("R:{}, P:{}".format(R,P))
+            model.fit(ALL_Exp, ALL_Normed_IQD)
+            plt.scatter(ALL_Exp, ALL_Normed_IQD)
+            upper = max(ALL_Normed_IQD)
+            plt.plot([0, upper], [0,model.predict(upper)], color='red')
+            plt.show()
+        else:
+            print "R:{}, P:{}".format(R,P) 
+    def LoadData(self, df_row, method = 'rolling_time', time_start=0, time_end=12):
+        assert time_end > time_start
+        self.time_start, self.time_end = time_start, time_end
+        Genes = list(set(self.df_var["effectGene"].values))
+        self.VarList = {}
+        self.Gene2Var = {}
+        self.Genes = []
+        for gene in Genes:
+            tmp_df = self.df_var[self.df_var["effectGene"]==gene]
+            famids = tmp_df["familyId"].values
+            varids = tmp_df["location"].values
+            exonids = [self.get_exon_id(x, gene, df_row) for x in varids]
+            exonids = [x for x in exonids if x != None]
+            exonids = [x for x in exonids if not self.isLastExon(x, df_row)]
+            exps = [] 
+            for exonid in exonids:
+                #seq = self.matrix.iloc[exonid-1, 0:12].values
+                seq = self.matrix.iloc[exonid-1, 0:12].values
+                if method == 'rolling_time':
+                    exp = self.avgseq(seq, self.time_start, self.time_end)
+                elif method == 'max':
+                    exp = max(seq) 
+                elif method == 'min':
+                    exp = min(seq)
+                exps.append(exp)
+            IQs = [max(0, (100-self.getIQ(x))) for x in famids]
+            dat = zip(famids, varids, exonids, IQs, exps)
+            dat = [x for x in dat if x[2]!= None]
+            if len(dat) < 2:
+                continue
+            self.Genes.append(gene)
+            for a in dat:
+                var = variant(a[1], a[0], a[3], gene, a[2], a[4])
+                self.VarList[var.VarID] = var
+                if gene in self.Gene2Var:
+                    self.Gene2Var[gene].append(var)
+                else:
+                    self.Gene2Var[gene] = [var]
+    def model2(self, plot=True, var2leave = None):
+        self.gene2slope = {}
+        ALL_Exp = np.array([])
+        ALL_Normed_IQD = np.array([])
+        for gene in self.Genes:
+            Vars = self.Gene2Var[gene]
+            if var2leave != None:
+                Vars = [x for x in Vars if x.VarID != var2leave]
+            exps = np.array([x.ExonExp for x in Vars])
+            IQDs = np.array([x.ProbandIQ for x in Vars])
+            regr = self.regGene2(exps, IQDs)
+            slope = regr.coef_[0]
+            #print gene, slope
+            if slope == 0:
+                continue
+            self.gene2slope[gene] = slope
+            ALL_Exp = np.append(ALL_Exp, exps)
+            NormIQDs = np.array([x/slope for x in IQDs])
+            ALL_Normed_IQD = np.append(ALL_Normed_IQD, NormIQDs)
+        #print ALL_Exp, ALL_Normed_IQD
+        model = linear_model.LinearRegression(fit_intercept=False)
+        ALL_Exp = ALL_Exp.reshape(-1,1)
+        R, P = scipy.stats.pearsonr([x[0] for x in ALL_Exp], ALL_Normed_IQD)
+        if plot:
+            plt.title("R:{}, P:{}, time{}-{}".format(round(R,6),round(P,6), self.time_start, self.time_end))
+            model.fit(ALL_Exp, ALL_Normed_IQD)
+            plt.scatter(ALL_Exp, ALL_Normed_IQD)
+            upper = max(ALL_Normed_IQD)
+            plt.plot([0, upper], [0,model.predict(upper)], color='red')
+            plt.show()
+    def Predict(self, var):
+        return self.gene2slope[var.Gene] * var.ExonExp
+
+class variant:
+    def __init__(self, VarID, ProbandID, ProbandIQ, Gene, ExonID, ExonExp):
+        self.VarID = VarID
+        self.ProbandID = ProbandID
+        self.ProbandIQ = ProbandIQ
+        self.Gene = Gene
+        self.ExonID = ExonID
+        self.ExonExp = ExonExp
+    def show(self):
+        print "VarID:{} FamID:{} IQ:{} Gene:{} ExonID:{} ExonExp:{}".format(
+        self.VarID, self.ProbandID, self.ProbandIQ, self.Gene, self.ExonID, self.ExonExp)
