@@ -27,6 +27,11 @@ go_sig_skel = "/Users/jiayao/Work/BrainDisorders/data/functions/go_cyto_sig.list
 go_channel = "/Users/jiayao/Work/BrainDisorders/data/functions/go_channel.list"
 go_chromatin = "/Users/jiayao/Work/BrainDisorders/data/functions/go_chromatin.list"
 
+andy_psd_channel = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_Lists/CLUST_NEURO_PSD_CHANN.txt"
+andy_cytp_sign = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_Lists/CLUST_NEURO_CYTO_SIGN.txt"
+andy_snf_bromo = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_Lists/CLUST_DEVEL_SNF_BROMO.txt"
+andy_znf = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_Lists/CLUST_DEVEL_ZN_FINGER.txt"
+
 class H2Analysis:
     def __init__(self):
         pass
@@ -596,7 +601,84 @@ class BrainSpan:
             if gene not in res:
                 continue
             bp_exon_row_meta_rep.at[i, "GeneHited"] = "T"
-            start, end = int(row["start"]) + 2 , int(row["end"]) + 2
+            start, end = int(row["start"]) - 2 , int(row["end"]) + 2
+            gene = row["gene_symbol"]
+            # Assign Variant to Exon
+            for var in res[gene]:
+                pos = int(var.split(":")[1])
+                #print pos
+                if pos >= start and pos <= end: #Var In This Exon
+                    bp_exon_row_meta_rep.at[i, "Vars"] = bp_exon_row_meta_rep.get_value(i, "Vars") + ";" + var if bp_exon_row_meta_rep.get_value(i, "Vars") != "" else var
+                    bp_exon_row_meta_rep.at[i, "VIQ70"] = var_IQ[var][0]
+                    bp_exon_row_meta_rep.at[i, "NVIQ70"] = var_IQ[var][1]
+                    bp_exon_row_meta_rep.at[i, "Gender"] = bp_exon_row_meta_rep.get_value(i, "Gender") + ";" + var_genders[var] if bp_exon_row_meta_rep.get_value(i, "Gender") != "" else var_genders[var]
+                    continue
+            # Assign Other Info
+            bp_exon_row_meta_rep.at[i, "Func"] = self.AssignFunc(gene, Cates)
+        bp_exon_row_meta_rep.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
+        return bp_exon_row_meta_rep
+    def AssignVar2Exon3(self, bp_exon_row_meta, VarFile, IntersectionWithPredicted = True, ProSib="Pro"):
+        VarDF = pd.read_excel(VarFile)
+        # Load annotations to gene
+        entrez_symbol_map = get_gene_entrez_symbol_map()
+        wigler_predicted_lgd_genes = set([entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)])
+        channel_psd_genes = set([x.strip() for x in file(andy_psd_channel)])
+        chromatin_genes = set([x.strip() for x in file(andy_snf_bromo)])
+        cyto_sign = set([x.strip() for x in file(andy_cytp_sign)])
+        tf_rbp = set([x.strip() for x in file(andy_znf)])
+        fam_info = pd.read_excel(wigler_fam_info)
+        famID2NVIQ = dict(zip(list(fam_info["familyId"]), list(fam_info["probandNVIQ"])))
+        famID2VIQ = dict(zip(list(fam_info["familyId"]), list(fam_info["probandVIQ"])))
+        
+        Cates = dict(zip(["Channel&PSD", "Chromatin", "Cytp&Sig", "TF&RBP"],[channel_psd_genes,chromatin_genes,cyto_sign,tf_rbp]))
+        res = {} # k:gene v:list of variants in that gene
+        var_genders = {}
+        var_IQ = {}
+        for i, row in VarDF.iterrows():
+            if IntersectionWithPredicted:
+                if row["effectGene"] not in wigler_predicted_lgd_genes:
+                    continue
+            # Get Variant Info
+            gene,var = row["effectGene"], row["location"]
+            if gene not in res:
+                res[gene] = [row["location"]]
+            else:
+                res[gene].append(row["location"])
+            # Get Gender Info
+            if var not in var_genders:
+                if ProSib == 'Pro':
+                    var_genders[var] = row["inChild"][:2]
+                else:
+                    var_genders[var] = row["inChild"][-2:]
+                #var_genders[var] = [row["inChild"][:2]]
+            else:
+                if ProSib == 'Pro':
+                    var_genders[var] = var_genders[var] + ";" + row["inChild"][:2]
+                else:
+                    var_genders[var] = var_genders[var] + ";" + row["inChild"][-2:]
+            # Get IQ Info
+            if var not in var_IQ:
+                FamID = row["familyId"]
+                var_IQ[var] = (famID2VIQ[FamID],famID2NVIQ[FamID])
+        bp_exon_row_meta_rep = bp_exon_row_meta.copy(deep=True)
+        bp_exon_row_meta_rep["NVIQ70"] = ""
+        bp_exon_row_meta_rep["VIQ70"] = ""
+        bp_exon_row_meta_rep["Gender"] = ""
+        bp_exon_row_meta_rep["Func"] = ""
+        bp_exon_row_meta_rep["Vars"] = ""
+        bp_exon_row_meta_rep["GeneHited"] = "F"
+        bp_exon_row_meta_rep["Last"] = "F"
+        LAST_GENE = None
+        for i, row in bp_exon_row_meta_rep.iterrows():
+            sys.stdout.write("\r{}".format(i))
+            gene = row["gene_symbol"]
+            if gene != LAST_GENE and gene != None:
+                bp_exon_row_meta_rep.at[i-1, "Last"] = "T" 
+            LAST_GENE = gene
+            if gene not in res:
+                continue
+            bp_exon_row_meta_rep.at[i, "GeneHited"] = "T"
+            start, end = int(row["start"]) - 2 , int(row["end"]) + 2
             gene = row["gene_symbol"]
             # Assign Variant to Exon
             for var in res[gene]:
