@@ -12,14 +12,22 @@ import random
 import bisect
 import collections
 import scipy.stats 
+import re
+import statsmodels.api as sm
+from scipy.stats import pearsonr
+from scipy.stats import spearmanr
 
+_nsre = re.compile('([0-9]+)')
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split(_nsre, s)] 
 # Files
 protein_coding_gene_file = "/Users/jiayao/Work/Resources/protein-coding_gene.txt"
 wigler_predicted_lgd = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-lgd.txt"
 wigler_predicted_male = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-male.txt"
 wigler_predicted_fem = "/Users/jiayao/Work/BrainDisorders/data/functions/wigler-predicted-fem.txt"
 wigler_fam_info = "/Users/jiayao/Work/BrainDisorders/data/nature13908-s2/Supplementary_Table_1.xlsx" #IQ in it
-
+ASD_high_conf = "/Users/jiayao/Work/BrainDisorders/data/ASD_high_confidence_genes_post80.txt"
 # Entrez ID of genes in each category; No overlap
 vitkup_psd = "/Users/jiayao/Work/BrainDisorders/data/functions/asd-vitkup-snv-cnv-psd.txt"
 vitkup_sig_skel = "/Users/jiayao/Work/BrainDisorders/data/functions/asd-vitkup-snv-cnv-sig-skel.txt"
@@ -37,7 +45,7 @@ andy_snf_bromo = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_L
 andy_znf = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_Lists/CLUST_DEVEL_ZN_FINGER.txt"
 
 
-Stages = ["2A", "2B", "3A", "3B"] + map(str,range(4,12))
+Stages = ["2A", "2B", "3A", "3B"] + [str(x) for x in range(4,12)]
 
 class H2Analysis:
     def __init__(self):
@@ -133,7 +141,7 @@ class H2Analysis:
         plt.ylim(ymin=0)
         if ymax is not None: plt.ylim(ymax=ymax)
         plt.xticks([c[1] for c in xs_by_chr], [c[0] for c in xs_by_chr], rotation=-90, size=8.5)
-        print >>sys.stderr, "saving to: %s" % image_path
+        print (sys.stderr, "saving to: %s" % image_path)
         plt.savefig(image_path)
         #plt.show() 
 
@@ -167,11 +175,12 @@ class BrainSpan:
         # store all exp value at a developemt time point
         #Stages = map(str,range(1,16))
         #self.Stages = ["1", "2A", "2B", "3A", "3B"] + map(str,range(4,12))
-        self.Stages = ["2A", "2B", "3A", "3B"] + map(str,range(4,12))
+        self.Stages = ["2A", "2B", "3A", "3B"] + [str(x) for x in range(4,12)]
         self.Descriptions = ["Early fetal", "Early fetal", "Early mid-fetal", "Early mid-fetal", "Late mid-fetal", "Late fetal", "Early infancy", "Late infancy", "Early childhood", "Late childhood", "Adolescence", "Adulthood"]
         self.Regions = []
         self.Regionsgt20 = ['OFC', 'VFC', 'HIP', 'ITC', 'AMY', 'DFC', 'STC', 'MFC', 'STR', 'IPC', 'V1C', 'S1C', 'A1C', 'M1C', 'CBC', 'MD']
-    def TemporalMap(self, age):
+        self.TimeDict = dict(zip(["8 pcw", "9 pcw", "12 pcw", "13 pcw", "16 pcw", "17 pcw", "19 pcw", "21 pcw", "24 pcw", "25 pcw", "26 pcw", "35 pcw", "37 pcw", "4 mos", "10 mos", "1 yrs", "2 yrs", "3 yrs", "4 yrs", "8 yrs", "11 yrs", "13 yrs", "15 yrs", "18 yrs", "19 yrs", "21 yrs", "23 yrs", "30 yrs", "36 yrs", "37 yrs", "40 yrs"], [("2A","2", "Early prenatal"), ("2A","2", "Early prenatal"), ("2B", "3", "Early prenatal"), ("3A", "4", "Early mid-prenatal"), ("3B", "5", "Early mid-prenatal"), ("3B", "5", "Early mid-prenatal"), ("4", "6", "Late mid-prenatal"), ("4", "6", "Late mid-prenatal"), ("4", "6", "Late mid-prenatal"), ("5", "7", "Late prenatal"), ("5", "7", "Late prenatal"), ("5", "7", "Late prenatal"), ("5", "7", "Late prenatal"), ("6", "8", "Early infancy"), ("7", "9", "Late infancy"), ("7", "9", "Late infancy"), ("8", "10", "Early childhood"), ("8", "10", "Early childhood"), ("8", "10", "Early childhood"), ("9", "11", "Late childhood"), ("9", "11", "Late childhood"), ("10", "12", "Adolescence"),("10", "12", "Adolescence"),("10", "12", "Adolescence"),("10", "12", "Adolescence"), ("11", "14", "adulthood"), ("11", "14", "adulthood"), ("11", "14", "adulthood"), ("11", "14", "adulthood"), ("11", "14", "adulthood"), ("11", "14", "adulthood")]))
+    def TemporalMap2(self, age):
         num, unit = age.split()
         num = float(num)
         if unit == 'pcw':
@@ -190,7 +199,7 @@ class BrainSpan:
             elif num >= 24 and num <38:
                 return ("5", "7", "Late prenatal")
             else:
-                print "Unexpected Value"
+                print ("Unexpected Value")
         elif unit == 'mos':
             if num>= 0 and num < 6:
                 return ("6", "8", "Early infancy")
@@ -209,6 +218,8 @@ class BrainSpan:
                 return ("11", "14", "Young adulthood")
             elif num >= 60:
                 return ("11", "15", "Young adulthood")
+    def TemporalMap(self, age):
+        return self.TimeDict[age]
     # Return res1: sequence of exp in 12 dev stages res2: num of samples at each timepoint
     def DisplayStageExp(self, Dict, out="nonzero"):
         res1 = []
@@ -518,8 +529,6 @@ class BrainSpan:
         res = {} # k:gene v:list of variants in that gene
         for row in reader:
             tmp = dict(zip(header, row))
-            if int(tmp["GeneCount"]) < 2:
-                continue
             if tmp["Gene"] not in res:
                 res[tmp["Gene"]] = [tmp]
             else:
@@ -705,6 +714,106 @@ class BrainSpan:
             bp_exon_row_meta_rep.at[i, "Func"] = self.AssignFunc(gene, Cates)
         bp_exon_row_meta_rep.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
         return bp_exon_row_meta_rep
+    def AssignVar2Exon4(self, bp_exon_row_meta, VarFile, IntersectionWithPredicted = True, ProSib="Pro"):
+        VarDF = pd.read_csv(VarFile, delimiter="\t")
+        # Load annotations to gene
+        entrez_symbol_map = get_gene_entrez_symbol_map()
+        wigler_predicted_lgd_genes = set([entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)])
+        channel_psd_genes = set([x.strip() for x in file(andy_psd_channel)])
+        chromatin_genes = set([x.strip() for x in file(andy_snf_bromo)])
+        cyto_sign = set([x.strip() for x in file(andy_cytp_sign)])
+        tf_rbp = set([x.strip() for x in file(andy_znf)])
+        
+        Cates = dict(zip(["Channel&PSD", "Chromatin", "Cytp&Sig", "TF&RBP"],[channel_psd_genes,chromatin_genes,cyto_sign,tf_rbp]))
+        res = {} # k:gene v:list of variants in that gene
+        for i, row in VarDF.iterrows():
+            if IntersectionWithPredicted:
+                if row["Gene"] not in wigler_predicted_lgd_genes:
+                    continue
+            gene,var = row["Gene"], str(row["#Chr"])+":"+str(row["Pos"])
+            if gene not in res:
+                res[gene] = [var]
+            else:
+                res[gene].append(var)
+            # Get IQ Info
+        bp_exon_row_meta_rep = bp_exon_row_meta.copy(deep=True)
+        bp_exon_row_meta_rep["Func"] = ""
+        bp_exon_row_meta_rep["Vars"] = ""
+        bp_exon_row_meta_rep["GeneHited"] = "F"
+        bp_exon_row_meta_rep["Last"] = "F"
+        LAST_GENE = None
+        for i, row in bp_exon_row_meta_rep.iterrows():
+            sys.stdout.write("\r{}".format(i))
+            gene = row["gene_symbol"]
+            if gene != LAST_GENE and gene != None:
+                bp_exon_row_meta_rep.at[i-1, "Last"] = "T" 
+            LAST_GENE = gene
+            if gene not in res:
+                continue
+            bp_exon_row_meta_rep.at[i, "GeneHited"] = "T"
+            start, end = int(row["start"]) - 2 , int(row["end"]) + 2
+            gene = row["gene_symbol"]
+            # Assign Variant to Exon
+            for var in res[gene]:
+                pos = int(var.split(":")[1])
+                #print pos
+                if pos >= start and pos <= end: #Var In This Exon
+                    bp_exon_row_meta_rep.at[i, "Vars"] = bp_exon_row_meta_rep.get_value(i, "Vars") + ";" + var if bp_exon_row_meta_rep.get_value(i, "Vars") != "" else var
+                    continue
+            # Assign Other Info
+            bp_exon_row_meta_rep.at[i, "Func"] = self.AssignFunc(gene, Cates)
+        bp_exon_row_meta_rep.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
+        return bp_exon_row_meta_rep
+    def AssignVar2Exon5(self, bp_exon_row_meta, VarFile, IntersectionWithPredicted = True, ProSib="Pro"):
+        VarDF = VarFile 
+        # Load annotations to gene
+        entrez_symbol_map = get_gene_entrez_symbol_map()
+        wigler_predicted_lgd_genes = set([entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)])
+        channel_psd_genes = set([x.strip() for x in file(andy_psd_channel)])
+        chromatin_genes = set([x.strip() for x in file(andy_snf_bromo)])
+        cyto_sign = set([x.strip() for x in file(andy_cytp_sign)])
+        tf_rbp = set([x.strip() for x in file(andy_znf)])
+        
+        Cates = dict(zip(["Channel&PSD", "Chromatin", "Cytp&Sig", "TF&RBP"],[channel_psd_genes,chromatin_genes,cyto_sign,tf_rbp]))
+        res = {} # k:gene v:list of variants in that gene
+        for i, row in VarDF.iterrows():
+            if IntersectionWithPredicted:
+                if row["Gene"] not in wigler_predicted_lgd_genes:
+                    continue
+            gene,var = row["Gene"], str(row["#Chr"])+":"+str(row["Pos"])
+            if gene not in res:
+                res[gene] = [var]
+            else:
+                res[gene].append(var)
+            # Get IQ Info
+        bp_exon_row_meta_rep = bp_exon_row_meta.copy(deep=True)
+        bp_exon_row_meta_rep["Func"] = ""
+        bp_exon_row_meta_rep["Vars"] = ""
+        bp_exon_row_meta_rep["GeneHited"] = "F"
+        bp_exon_row_meta_rep["Last"] = "F"
+        LAST_GENE = None
+        for i, row in bp_exon_row_meta_rep.iterrows():
+            sys.stdout.write("\r{}".format(i))
+            gene = row["gene_symbol"]
+            if gene != LAST_GENE and gene != None:
+                bp_exon_row_meta_rep.at[i-1, "Last"] = "T" 
+            LAST_GENE = gene
+            if gene not in res:
+                continue
+            bp_exon_row_meta_rep.at[i, "GeneHited"] = "T"
+            start, end = int(row["start"]) - 2 , int(row["end"]) + 2
+            gene = row["gene_symbol"]
+            # Assign Variant to Exon
+            for var in res[gene]:
+                pos = int(var.split(":")[1])
+                #print pos
+                if pos >= start and pos <= end: #Var In This Exon
+                    bp_exon_row_meta_rep.at[i, "Vars"] = bp_exon_row_meta_rep.get_value(i, "Vars") + ";" + var if bp_exon_row_meta_rep.get_value(i, "Vars") != "" else var
+                    continue
+            # Assign Other Info
+            bp_exon_row_meta_rep.at[i, "Func"] = self.AssignFunc(gene, Cates)
+        bp_exon_row_meta_rep.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
+        return bp_exon_row_meta_rep
     def LookMutationTargetedExon(self, Gene, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, GeneDat=None, smooth=True, drop_low_exp=True, fontsize=6):
         Exons = bp_exon_row_meta[bp_exon_row_meta["gene_symbol"]==Gene]
         GeneExonExp = ExonExp[ExonExp[0].isin(list(Exons["row_num"]))]
@@ -755,7 +864,7 @@ class BrainSpan:
                             stages[Period] = DevStageExp(Period)
                         stages[Period].add_exp(GeneExp.get_value(gene_id-1, row["column_num"]))
                 seq, Nsample = DisplayStageExp(stages)
-                print seq
+                print (seq)
                 if smooth:
                     res[gene_id] = smooth_func(seq)
                 else:
@@ -763,7 +872,7 @@ class BrainSpan:
             #add_layout(LinearAxis(y_range_name="GeneRPKM"), 'right')
             ax2 = ax.twinx()
             for gene_id in gene_ids:
-                print res[gene_id]
+                print (res[gene_id])
                 ax2.plot(range(2,14), [math.log(x,2) if x !=0 else 0 for x in res[gene_id]], color="black") 
                 #ax2.plot(range(2,14), res[gene_id], color="black") 
             ax2.set_ylabel("GeneRPKM")
@@ -864,7 +973,7 @@ class BrainSpan:
             seq = self.DisplayStageExp(stages)[0]
             if drop_low_exp:
                 if seq.count(0) >= 4:
-                    print _id
+                    print (_id)
                     Numrecords -= 1
                     continue
             #print seq
@@ -888,11 +997,11 @@ class BrainSpan:
                     res[_id][i] = res[_id][i] / denominator
                     tmp2 += res[_id][i]
                     expsi.append(res[_id][i])
-            print np.var(expsi),
+            print (np.var(expsi),)
             records_mean.append(tmp1/Numrecords)
             records_mean_norm.append(tmp2/Numrecords)
-            print
-        print records_mean, records_mean_norm, denominators
+            print()
+        print (records_mean, records_mean_norm, denominators)
         plt.close('all')
         fig, ax = plt.subplots()
         ax.plot(xrange(2,14), records_mean, label='avg')
@@ -903,7 +1012,7 @@ class BrainSpan:
         ax2.legend()
         plt.show()
         sys.stdout.write("\n")
-        print records_mean 
+        print (records_mean )
         return records_mean 
     def LoadingDat2SeqCrossRecordCrossRegion(self, record_ids, regions, row_meta, col_meta, Matrix, smooth=True, drop_low_exp=True, space = 'norm', shutup=True):
         stages = {}
@@ -958,7 +1067,7 @@ class BrainSpan:
         seq1, seq2 = None, None
 
         for SetName, (color, ExonIDs) in exon_ids_sets.items():
-            print SetName
+            print (SetName)
             ExonIDs = [int(x) for x in ExonIDs]
             seq, error_var, median = self.LoadingDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=False, space = space, shutup=False) # Loading data needed
             #seq = [math.log(x, 10) for x in seq]
@@ -983,7 +1092,7 @@ class BrainSpan:
         ax.legend()
         plt.show()
         pre, post = self.Bias(seq1, seq2)
-        print pre, post, pre-post
+        print (pre, post, pre-post)
     # with Nromlization within exon sets.
     def LookALLMutationTargetedExon(self, exon_ids_pairs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True, drop_low_exp=True, fontsize=6, rd=False, method = "mean", space = 'log'):
         plt.close('all')
@@ -1013,7 +1122,7 @@ class BrainSpan:
                 seq1 = Tmedian
                 seq2 = Umedian
             pre, post = self.Bias(seq1, seq2)
-            print SetName, pre, post, pre-post
+            print (SetName, pre, post, pre-post)
         ax.grid(True)
         ax.axvline(x=7.5)
         plt.xticks(np.arange(2,14), self.Stages, rotation=20)
@@ -1041,7 +1150,7 @@ class BrainSpan:
         fig, ax = plt.subplots(dpi=200)
         plt.title("Exons Exp over Region:{}".format(",".join(structure_acronyms)))
         for SetName, (color, ExonIDs) in exon_ids_sets.items():
-            print SetName
+            print (SetName)
             ExonIDs = [int(x) for x in ExonIDs]
             seq = self.LoadingNormDat2SeqCrossRecordCrossRegion(ExonIDs, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, smooth=True) # Loading data needed
             seq = [math.log(x,10) for x in seq]
@@ -1081,7 +1190,7 @@ class BrainSpan:
             log2seq.append(np.mean(stages[stage]))
             stderrs.append(math.sqrt( np.var(stages[stage])/N ))
             medians.append(np.median(stages[stage]))
-        print Ndrop
+        print (Ndrop)
         return log2seq, stderrs, medians, drops
     def Bias(self, seq1, seq2):
         diff = []
@@ -1096,7 +1205,7 @@ class BrainSpan:
         seq1, seq2 = None, None
         ALL_drop = []
         for SetName, (color, ExonIDs) in exon_ids_sets.items():
-            print SetName
+            print (SetName)
             ExonIDs = [int(x) for x in ExonIDs]
             log2seq, stderrs, medians, drops = self.LoadSummarizedExonExp(ExonIDs, bp_exon_row_meta, ExonExp, drop_low_exp=drop_low_exp) # Loading data needed
             ALL_drop.extend(drops)
@@ -1121,7 +1230,7 @@ class BrainSpan:
         ax.legend()
         plt.show()
         pre, post = self.Bias(seq1, seq2)
-        print pre, post, pre-post
+        print (pre, post, pre-post)
         return ALL_drop
 
     def LookALLMutationTargetedGenes(self, Gene_id_sets, structure_acronyms, GeneDat, smooth=True, drop_low_exp=True, fontsize=6, ylim=None):
@@ -1132,7 +1241,7 @@ class BrainSpan:
         fig, ax = plt.subplots(dpi=200)
         plt.title("TargetedExons over Region:{}".format(",".join(structure_acronyms)))
         for SetName, (color, GeneIDs) in Gene_id_sets.items():
-            print SetName
+            print (SetName)
             GeneIDs = [int(x) for x in GeneIDs]
             seq = self.LoadingDat2SeqCrossRecordCrossRegion(GeneIDs, structure_acronyms, GeneCol, GeneCol, GeneExp, smooth=True) # Loading data needed
             #ax.plot(range(1,16),[math.log(x, 2) if x!=0 else 0 for x in seq])
@@ -1252,7 +1361,7 @@ class BrainSpan:
     def LoadGeneSetData2Fil(self, FilName, Genes, Regions, Exon_row_meta, Exon_col_meta, Matrix):
         #Regions_indice
         writer = csv.writer(open(FilName, 'wb'))
-        print "Total Num of Genes:", len(Genes)
+        print ("Total Num of Genes:", len(Genes))
         for i, gene in enumerate(Genes):
             ExonIDs = Exon_row_meta[Exon_row_meta["gene_symbol"]==gene]["row_num"].values
             for ExonID in ExonIDs:
@@ -1265,6 +1374,27 @@ class BrainSpan:
                         exp = round(math.log(exp+1, 2), 6)
                         tmp.append(exp)
                     writer.writerow(tmp)
+            #if i % 10 == 0:
+            #sys.stdout.write("\rLoad {} genes".format(i))
+    
+    # Similar to previous func, gene stage instead of gene exon stage
+    def LoadGeneSetData2Fil2(self, FilName, Genes, Regions, row_meta, col_meta, Matrix):
+        #Regions_indice
+        writer = csv.writer(open(FilName, 'wb'))
+        print ("Total Num of Genes:", len(Genes))
+        for i, gene in enumerate(Genes):
+            #ExonIDs = Exon_row_meta[Exon_row_meta["gene_symbol"]==gene]["row_num"].values
+            GeneID = row_meta[row_meta["gene_symbol"]==gene]["row_num"].values[0]
+            #for ExonID in ExonIDs:
+            #    ExonID = int(ExonID)
+            for i, stage in enumerate(self.Stages):
+                tmp = [gene, stage]
+                cols = col_meta[(col_meta["Period"]==stage) & (col_meta["structure_acronym"].isin(Regions))]["column_num"].values
+                for col in cols:
+                    exp = Matrix.get_value(GeneID-1, col)
+                    exp = round(math.log(exp+1, 2), 6)
+                    tmp.append(exp)
+                writer.writerow(tmp)
             #if i % 10 == 0:
             #sys.stdout.write("\rLoad {} genes".format(i))
 
@@ -1285,6 +1415,20 @@ class BrainSpan:
             res[Gene][Exon][time] = exps
         return res
 
+    def LoadGeneSetDataFromFil2(self, FilName):
+        res = {}
+        fin = open(FilName, 'rb')
+        for l in fin:
+            llist = l.strip().split(",")
+            Gene, time = llist[:2]
+            exps = map(float, llist[2:])
+            if Gene not in res:
+                res[Gene] = {}
+            if time not in res[Gene]:
+                res[Gene][time] = None
+            res[Gene][time] = exps
+        return res
+
 class GeneExonSet(BrainSpan):
     def __init__(self, expdict, Name="geneset", Color='black'):
         self.GeneSetName = Name
@@ -1302,24 +1446,32 @@ class GeneExonSet(BrainSpan):
         #self.Genes[Genesymbol].addExp(ExpDict)
 
     def Reduce(self, logscale = False):
-        self.Tseq, self.Terr, self.Useq, self.Uerr = [], [], [], []
+        self.Tseq, self.Terr, self.Useq, self.Uerr, self.All, self.Allerr= [], [], [], [], [], []
         for stage in Stages:
             tmp1 = []
             tmp2 = []
+            tmp3 = []
             for gene in self.Genes:
+                if gene not in self.expdict or gene not in self.Genes:
+                    continue 
                 for ExonID in self.Genes[gene].TargetedExons:
                     tmp1.extend(self.expdict[gene][ExonID][stage])
+                    tmp3.extend(self.expdict[gene][ExonID][stage])
                 for ExonID in self.Genes[gene].UntargetedExons:
                     tmp2.extend(self.expdict[gene][ExonID][stage])
+                    tmp3.extend(self.expdict[gene][ExonID][stage])
             self.Tseq.append(np.mean(tmp1))
             self.Terr.append( math.sqrt( np.var(tmp1) / len(tmp1) ) )
             self.Useq.append(np.mean(tmp2))
             self.Uerr.append( math.sqrt( np.var(tmp2) / len(tmp2) ) )
+            self.All.append(np.mean(tmp3))
+            self.Allerr.append( math.sqrt( np.var(tmp3) / len(tmp3) ) )
         if logscale == True:
-            Tseq, Useq, Terr, Uerr = self.Tseq, self.Useq, self.Terr, self.Uerr
+            Tseq, Useq, Terr, Uerr, Allseq, Allerr = self.Tseq, self.Useq, self.Terr, self.Uerr, self.All, self.Allerr
         else:
             Tseq, Useq, Terr, Uerr = [2 ** x for x in self.Tseq], [2 ** x for x in self.Useq], self.converterror(self.Tseq, self.Terr), self.converterror(self.Useq, self.Uerr)
-        return (Tseq, Terr, Useq, Uerr)
+            Allseq, Allerr = [2 ** x for x in self.All], self.converterror(self.All, self.Allerr)
+        return (Tseq, Terr, Useq, Uerr, Allseq, Allerr)
     def Reduce2(self):
         self.Tseq, self.Terr, self.Useq, self.Uerr = [], [], [], []
         for stage in Stages:
@@ -1344,7 +1496,7 @@ class GeneExonSet(BrainSpan):
         ax.errorbar(range(2,15), Tseq, yerr = Terr, label=title+"_Targeted", color=color)
         ax.errorbar(range(2,15), Useq, yerr = Uerr, linestyle = '--', label=title+"_Untargeted", color=color)
         pre, post = self.Bias(Tseq, Useq)
-        print pre, post, pre-post
+        print (pre, post, pre-post)
         ax.grid(True)
         ax.axvline(x=7.5, color="black")
         plt.xticks(np.arange(2,15), Stages, rotation=20)
@@ -1390,16 +1542,32 @@ class GeneExonSet(BrainSpan):
             Tseq.append(np.mean(tmp1[stage]))
             Useq.append(np.mean(tmp2[stage]))
         Tseq, Useq = [2 ** x for x in Tseq], [2 ** x for x in Useq]
-        pre, post, bias = Bias(Tseq, Useq)
+        #pre, post, bias = Bias2(Tseq, Useq)
+        pre1, post1, T, pre2, post2, U = Bias2(Tseq, Useq)
+        #print pre, post, bias
+        bias = T/U
         if plot:
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(dpi=80)
             ax.plot(range(2,14), Tseq, color='red')
             ax.plot(range(2,14), Useq, color='blue')
+            ax.grid(True)
+            ax.axvline(x=7.5, color="grey", linestyle="--")
             plt.show()
         return bias, TExons, UExons
         
-def Bias(seq1, seq2, method=3):
-    if method == 3:
+def Bias(seq1, seq2, method=4):
+    print ('bias')
+    if method == 4:
+        print ('4')
+        pre1 = np.mean(seq1[0:6])
+        post1 = np.mean(seq1[6:13])
+        T = pre1/post1
+        pre2 = np.mean(seq2[0:6])
+        post2 = np.mean(seq2[6:13])
+        U = pre2/post2
+        return pre1, post1, T, pre2, post2, U
+    elif method == 3:
+        print ('3')
         FC_pre = []
         for T, U in zip(seq1[:6], seq2[:6]):
             FC_pre.append(T/U)
@@ -1409,6 +1577,7 @@ def Bias(seq1, seq2, method=3):
         FC_pre, FC_post = np.mean(FC_pre), np.mean(FC_post)
         return FC_pre, FC_post, FC_pre / FC_post
     else:
+        print ('else')
         diff = []
         for i, stage in enumerate(Stages):
             diff.append(seq1[i]-seq2[i])
@@ -1416,6 +1585,14 @@ def Bias(seq1, seq2, method=3):
         pre, post = sum(diff[0:6]), sum(diff[6:12])
         #return pre, post, (pre-post)/post
         return pre, post, (pre-post)
+def Bias2(seq1, seq2, method=4):
+    pre1 = np.mean(seq1[0:6])
+    post1 = np.mean(seq1[6:13])
+    T = pre1/post1
+    pre2 = np.mean(seq2[0:6])
+    post2 = np.mean(seq2[6:13])
+    U = pre2/post2
+    return pre1, post1, T, pre2, post2, U
 
 class TargetedGene:
     def __init__(self, genesymbol, TargetedExonID, UntargetedExonID, TargetedExonLength, UntargetedExonLength):
@@ -1462,7 +1639,7 @@ class TargetedGene:
             #res.append(2**(u-l))
         #print res
         if np.mean(res[:6]) - np.mean(res[6:12]) < -10:
-            print self.genesymbol, res 
+            print (self.genesymbol, res )
         return np.mean(res[:6]), np.mean(res[6:12])
     def plot(self, expdict):
         fig, ax = plt.subplots(dpi=120)
@@ -1481,7 +1658,7 @@ class TargetedGene:
         ax.plot(range(2,14), Tseq, label="Targeted", color='red')
         ax.errorbar(range(2,14), Useq, yerr = Uerr, linestyle = '--', label="Untargeted", color='grey')
         pre, post, bias = Bias(Tseq, Useq)
-        print pre, post, bias
+        print (pre, post, bias)
         ax.grid(True)
         ax.axvline(x=7.5, color="grey", linestyle="--")
         plt.xticks(np.arange(2,14), Stages, rotation=20)
@@ -1541,6 +1718,98 @@ def GetExonProb(exon_df):
     Total_length = sum(exon_df["exon length"].values)
     Probs = [float(x)/Total_length for x in exon_df["exon length"].values]
     return exon_df.index.values, Probs
+
+def CollectDat(G1, G2):
+    G1_pre, G1_post, G2_pre, G2_post = [], [], [], []
+    for gene in G1.Genes:
+        if gene not in G1.expdict:
+            continue
+        for ExonID in G1.Genes[gene].TargetedExons:
+            pre, post = [], []
+            for i, stage in enumerate(Stages):
+                if i < 6:
+                    pre.extend(G1.expdict[gene][ExonID][stage])
+                else:
+                    post.extend(G1.expdict[gene][ExonID][stage])
+            #print pre, post
+            #G1_pre.append(np.mean(pre))
+            #G1_post.append(np.mean(post))
+            G1_pre.extend(pre)
+            G1_post.extend(post)
+    for gene in G2.Genes:
+        if gene not in G2.expdict:
+            continue
+        for ExonID in G2.Genes[gene].TargetedExons:
+            pre, post = [], []
+            for i, stage in enumerate(Stages):
+                if i < 6:
+                    pre.extend(G2.expdict[gene][ExonID][stage])
+                else:
+                    post.extend(G2.expdict[gene][ExonID][stage])
+            #G2_pre.append(np.mean(pre))
+            #G2_post.append(np.mean(post))
+            G2_pre.extend(pre)
+            G2_post.extend(post)
+    return G1_pre, G1_post, G2_pre, G2_post
+
+def load_mutation_exp(VarFile, expdictfile, outname="tmp.targeted.exons.xlsx", row_meta=None):
+    row_meta = ins.AssignVar2Exon5(row_meta, VarFile, IntersectionWithPredicted=False)
+    row_meta_with_gene = row_meta[row_meta["GeneHited"]=="T"]
+    row_meta_with_gene.to_excel(outname, index=False)
+    print ("Num.of.Genes:", row_meta_with_gene.groupby('gene_symbol').count().shape)
+
+    expdict = ins.LoadGeneSetDataFromFil(expdictfile)
+    Genes = list(set(row_meta_with_gene["gene_symbol"].values))
+    gene_exon_set = GeneExonSet(expdict)
+    for i, gene in enumerate(Genes):
+        gene_df = row_meta_with_gene[row_meta_with_gene["gene_symbol"]==gene]
+        TargetedExon = map(int, gene_df[gene_df["Vars"]!=""]["row_num"])
+        UntargetedExon = map(int, gene_df[gene_df["Vars"]==""]["row_num"])
+        TargetedExonLength = map(int, gene_df[gene_df["Vars"]!=""]["cds length"])
+        UntargetedExonLength = map(int, gene_df[gene_df["Vars"]==""]["cds length"])
+        gene_exon_set.addGene(gene, TargetedExon, UntargetedExon, TargetedExonLength, UntargetedExonLength)
+    print (len(gene_exon_set.genes), len(gene_exon_set.TargetedExon),len(gene_exon_set.UntargetedExon))
+    return gene_exon_set
+
+#[("proband LGD", 'red', prolgd), ("gnomAD LGD", 'blue', gnomADlgd),
+# ("gnomAD male LGD", 'yellow', gnomADlgd_male),("gnomAD female LGD", 'green', gnomADlgd_female) ]
+
+def plot_mutation_exp(title, datasets, ylims=((4,12.25))):
+    fig, ax = plt.subplots(figsize=(6, 3), dpi=120)
+    plt.title(title)
+    for i, (title, color, Dat) in enumerate(datasets):
+        Tseq, Terr, Useq, Uerr, All, Allerr = Dat
+        ax.errorbar(range(2,14), Tseq, yerr = Terr, label=title, color=color)
+        #ax.errorbar(range(2,14), Useq, yerr = Uerr, label="Exons without LGD mutations", color=color)
+        ax.errorbar(range(2,14), All, yerr = Allerr, linestyle = '--', label="All Exons", color=color)
+
+    ax.grid(True)
+    ax.axvline(x=7.5, color="grey", linestyle="--")
+    plt.xticks(np.arange(2,14), ins.Descriptions, rotation=60)
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+    # Put a legend to the right of the current axis
+    #ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    ax.legend(loc='upper right', fontsize=8)
+    plt.xlabel("Dev Stages")
+    plt.ylabel("Expression")
+    plt.ylim(ylims)
+    plt.show()
+
+def quantileNormalize(df_input):
+    df = df_input.copy()
+    #compute rank
+    dic = {}
+    for col in df:
+        dic.update({col : sorted(df[col])})
+    sorted_df = pd.DataFrame(dic)
+    rank = sorted_df.mean(axis = 1).tolist()
+    #sort
+    for col in df:
+        t = np.searchsorted(np.sort(df[col]), df[col])
+        df[col] = [rank[i] for i in t]
+    return df
 
 class HBT_DATA:
     def __init__(self):
@@ -1629,7 +1898,7 @@ class HBT_DATA:
                 seq.append(np.mean(stages[stage]))
             except KeyError:
                 seq.append(0)
-        print seq
+        print (seq)
         if smooth:
             seq = smooth_func(seq)
         fig, ax = plt.subplots(dpi=200)
@@ -1788,7 +2057,7 @@ class PredictIQFromExon:
             plt.plot([0, upper], [0,model.predict(upper)], color='red')
             plt.show()
         else:
-            print "R:{}, P:{}".format(R,P) 
+            print ("R:{}, P:{}".format(R,P)) 
     def LoadData(self, df_row, method = 'rolling_time', time_start=0, time_end=12):
         assert time_end > time_start
         self.time_start, self.time_end = time_start, time_end
@@ -1869,5 +2138,58 @@ class variant:
         self.ExonID = ExonID
         self.ExonExp = ExonExp
     def show(self):
-        print "VarID:{} FamID:{} IQ:{} Gene:{} ExonID:{} ExonExp:{}".format(
-        self.VarID, self.ProbandID, self.ProbandIQ, self.Gene, self.ExonID, self.ExonExp)
+        print ("VarID:{} FamID:{} IQ:{} Gene:{} ExonID:{} ExonExp:{}".format(
+        self.VarID, self.ProbandID, self.ProbandIQ, self.Gene, self.ExonID, self.ExonExp))
+
+def loaddict():
+    res = {}
+    fin = open("/Users/jiayao/Work/BrainDisorders/src/cds.dict", 'rb')
+    for l in fin:
+        llist = l.strip().split()
+        gene, exon_s, cds_s, cds_e = llist[0], int(llist[1])-1, int(llist[2])-1, int(llist[3])
+        if gene not in res:
+            res[gene] = {}
+        if exon_s not in res[gene]:
+            res[gene][exon_s] = (cds_s, cds_e)
+    return res
+def addcds(row, cds_dict):
+    s = row["start"]
+    gene = row["gene_symbol"]
+    if gene not in cds_dict:
+        return row["exon length"]
+    if s in cds_dict[gene]:
+        cds_s, cds_e = cds_dict[gene][s]
+        return cds_e - cds_s
+    else:
+        return row["exon length"]
+
+
+def CrossVal(df, Splits, Xlabels, Ylabel="NVIQ", Fold=5):
+    Scores_Train, Scores_Test = [], []
+    for i in range(Fold):
+        heldout = Splits[i]
+        TestingDat = df.loc[heldout[0]:heldout[1],:]
+        TrainingDat = df[~df["KEY"].isin(TestingDat["KEY"].values)]
+        assert len(Xlabels) >= 1
+        X_train = np.reshape(np.array(TrainingDat[Xlabels[0]].values), (-1,1))
+        #const_train = np.reshape(np.ones(X_train.shape[0]),(-1,1))
+        #X_train = np.hstack((const_train, X_train))
+        X_test = np.reshape(np.array(TestingDat[Xlabels[0]].values), (-1,1))
+        #const_test = np.reshape(np.ones(X_test.shape[0]),(-1,1))
+        #X_test = np.hstack((const_test, X_test))
+        for i in range(1, len(Xlabels)):
+            x_train = np.reshape(np.array(TrainingDat[Xlabels[i]].values), (-1,1))
+            X_train = np.hstack((X_train, x_train))
+            x_test = np.reshape(np.array(TestingDat[Xlabels[i]].values), (-1,1))
+            X_test = np.hstack((X_test, x_test))
+        Y_train = np.reshape(np.array(TrainingDat["NVIQ"].values), (-1, 1))
+        Y_test = np.reshape(np.array(TestingDat["NVIQ"].values), (-1, 1))
+        glm = sm.GLM(Y_train, X_train, family=sm.families.Gaussian())
+        res = glm.fit(method="newton")
+        pred_train = res.predict(X_train)
+        pred_test = res.predict(X_test)
+        #Scores_Train.append(PredErrMean(pred_train, Y_train))
+        #Scores_Test.append(PredErrMean(pred_test, Y_test))
+        Scores_Train.append(PredErrMedian(pred_train, Y_train))
+        Scores_Test.append(PredErrMedian(pred_test, Y_test))
+    return Scores_Train, Scores_Test
