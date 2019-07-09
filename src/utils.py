@@ -2164,32 +2164,324 @@ def addcds(row, cds_dict):
         return row["exon length"]
 
 
-def CrossVal(df, Splits, Xlabels, Ylabel="NVIQ", Fold=5):
-    Scores_Train, Scores_Test = [], []
-    for i in range(Fold):
-        heldout = Splits[i]
-        TestingDat = df.loc[heldout[0]:heldout[1],:]
-        TrainingDat = df[~df["KEY"].isin(TestingDat["KEY"].values)]
-        assert len(Xlabels) >= 1
-        X_train = np.reshape(np.array(TrainingDat[Xlabels[0]].values), (-1,1))
-        #const_train = np.reshape(np.ones(X_train.shape[0]),(-1,1))
-        #X_train = np.hstack((const_train, X_train))
-        X_test = np.reshape(np.array(TestingDat[Xlabels[0]].values), (-1,1))
-        #const_test = np.reshape(np.ones(X_test.shape[0]),(-1,1))
-        #X_test = np.hstack((const_test, X_test))
-        for i in range(1, len(Xlabels)):
-            x_train = np.reshape(np.array(TrainingDat[Xlabels[i]].values), (-1,1))
-            X_train = np.hstack((X_train, x_train))
-            x_test = np.reshape(np.array(TestingDat[Xlabels[i]].values), (-1,1))
-            X_test = np.hstack((X_test, x_test))
-        Y_train = np.reshape(np.array(TrainingDat["NVIQ"].values), (-1, 1))
-        Y_test = np.reshape(np.array(TestingDat["NVIQ"].values), (-1, 1))
-        glm = sm.GLM(Y_train, X_train, family=sm.families.Gaussian())
-        res = glm.fit(method="newton")
-        pred_train = res.predict(X_train)
-        pred_test = res.predict(X_test)
-        #Scores_Train.append(PredErrMean(pred_train, Y_train))
-        #Scores_Test.append(PredErrMean(pred_test, Y_test))
-        Scores_Train.append(PredErrMedian(pred_train, Y_train))
-        Scores_Test.append(PredErrMedian(pred_test, Y_test))
-    return Scores_Train, Scores_Test
+def regGene(X, Y):
+    regr = linear_model.LinearRegression(fit_intercept=False)
+    X_train = np.array(X)
+    X_train = np.reshape(X_train, (-1, 1))
+    y_train = np.array(Y)
+    y_train = np.reshape(y_train, (-1, 1))
+    regr.fit(X_train, y_train)
+    return regr
+def plotGene(gene, regr, dat):
+    X_train = np.array([[x[4]] for x in dat])
+    y_train = np.array([x[3] for x in dat])
+    y_pred = regr.predict(X_train)
+    #print('Coefficients:', regr.coef_)
+    R, P = scipy.stats.pearsonr([x[0] for x in X_train], y_train)
+    plt.title("Gene:{}, R:{}, P:{}".format(gene, R,P))
+    plt.xlim(0,3)
+    plt.ylim(0, max(y_train+y_pred))
+    plt.scatter(X_train, y_train,  color='black')
+    plt.plot(np.append(X_train, [0]), np.append(y_pred, 0), color='blue', linewidth=3)
+    plt.show()
+
+def SSE(List1, List2):
+    #return sum([(x-y)**2 for x,y in zip(List1, List2)])
+    #return scipy.stats.mstats.gmean([(x-y)**2 for x,y in zip(List1, List2)]) 
+    return np.mean([(x-y)**2 for x,y in zip(List1, List2)]) 
+def PredErrMean(List1, List2):
+    return np.mean([abs(x-y) for x,y in zip(List1, List2)])
+def PredErrMedian(List1, List2):
+    return np.median([abs(x-y) for x,y in zip(List1, List2)])
+def PredErrgMean(List1, List2):
+    return scipy.stats.mstats.gmean([abs(x-y) for x,y in zip(List1, List2)])
+
+def CrossVal(df, Splits, Xlabels, Ylabel="NVIQ", Fold=5, Intercept=False, Error="median", N=100):
+    SCORES_TRAIN, SCORES_TEST = [], []
+    for i in range(N):
+        df = df.sample(frac=1).reset_index(drop=True)
+        Scores_Train, Scores_Test = [], []
+        for i in range(Fold):
+            heldout = Splits[i]
+            TestingDat = df.loc[heldout[0]:heldout[1],:]
+            TrainingDat = df[~df["KEY"].isin(TestingDat["KEY"].values)]
+            assert len(Xlabels) >= 1
+            X_train = np.reshape(np.array(TrainingDat[Xlabels[0]].values), (-1,1))
+            if Intercept:
+                const_train = np.reshape(np.ones(X_train.shape[0]),(-1,1))
+                X_train = np.hstack((const_train, X_train))
+            X_test = np.reshape(np.array(TestingDat[Xlabels[0]].values), (-1,1))
+            #const_test = np.reshape(np.ones(X_test.shape[0]),(-1,1))
+            #X_test = np.hstack((const_test, X_test))
+            for i in range(1, len(Xlabels)):
+                x_train = np.reshape(np.array(TrainingDat[Xlabels[i]].values), (-1,1))
+                X_train = np.hstack((X_train, x_train))
+                x_test = np.reshape(np.array(TestingDat[Xlabels[i]].values), (-1,1))
+                X_test = np.hstack((X_test, x_test))
+            Y_train = np.reshape(np.array(TrainingDat["NVIQ"].values), (-1, 1))
+            Y_test = np.reshape(np.array(TestingDat["NVIQ"].values), (-1, 1))
+            glm = sm.GLM(Y_train, X_train, family=sm.families.Gaussian())
+            res = glm.fit(method="newton")
+            pred_train = res.predict(X_train)
+            pred_test = res.predict(X_test)
+            if Error == "mean":
+                Scores_Train.append(PredErrMean(pred_train, Y_train))
+                Scores_Test.append(PredErrMean(pred_test, Y_test))
+            else:
+                Scores_Train.append(PredErrMedian(pred_train, Y_train))
+                Scores_Test.append(PredErrMedian(pred_test, Y_test))
+        SCORES_TRAIN.append(np.mean(Scores_Train))
+        SCORES_TEST.append(np.mean(Scores_Test))
+    return SCORES_TRAIN, SCORES_TEST
+
+def DosageModel(df, SameGender=False, plot=True):
+    GeneCount = df.groupby("effectGene")["effectGene"].count()
+    df["GeneCount"] = df.apply(lambda row: GeneCount[row["effectGene"]], axis=1)
+    df = df[df["GeneCount"]>=2].copy()
+    IQ_diff_dosage, IQ_diff_gene, IQ_diff_mean = [], [], []
+    IIQs = []
+    pred_dosage, pred_gene, pred_mean = [],[],[]
+    #avg_IQ = np.mean(df["NVIQ"].values)
+    ALL_IQ = []
+    for i, row in df.iterrows():
+        familyId, gene, ralexp, IQ, gender= row["familyId"], row["effectGene"], row["Rel.exp.amean"], row["NVIQ"], row["gender"]
+        if SameGender:
+            tmp = df[(df["effectGene"]==gene) & (df["familyId"]!=familyId) & (df["gender"]==gender)]
+        else:
+            tmp = df[(df["effectGene"]==gene) & (df["familyId"]!=familyId)]
+        if tmp.shape[0] < 1:
+            continue
+        ALL_IQ.append(row["NVIQ"])
+    avg_IQ = np.mean(ALL_IQ)
+    N = 0
+    for i, row in df.iterrows():
+        familyId, gene, ralexp, IQ, gender= row["familyId"], row["effectGene"], row["Rel.exp.amean"], row["NVIQ"], row["gender"]
+        if SameGender:
+            tmp = df[(df["effectGene"]==gene) & (df["familyId"]!=familyId) & (df["gender"]==gender)]
+        else:
+            tmp = df[(df["effectGene"]==gene) & (df["familyId"]!=familyId)]
+        if tmp.shape[0] < 1:
+            continue
+        IQs = tmp["NVIQ"].values
+        IQDiffs = [max(0, (100-x)) for x in IQs]
+        rel_exps = list(tmp["Rel.exp.amean"].values)
+        regr = regGene(rel_exps, IQDiffs)
+        slope = regr.coef_[0][0]
+        IQpre_dosage = max(0, (100 - slope * ralexp))
+        IQpre_gene = np.mean(IQs)
+        if abs(IQ - IQpre_dosage) > 40:
+            if plot:
+                print(row["KEY"], gene, IQ, IQpre_dosage, ralexp)
+            #continue
+        df.loc[i, "Dosage"] = IQpre_dosage
+        IQ_diff_dosage.append(abs(IQ - IQpre_dosage))
+        IQ_diff_gene.append(abs(IQ - IQpre_gene))
+        IQ_diff_mean.append(abs(IQ - avg_IQ))
+        pred_dosage.append(IQpre_dosage)
+        pred_gene.append(IQpre_gene)
+        pred_mean.append(avg_IQ)
+        IIQs.append(IQ)
+        N += 1
+    if plot:
+        print(N)
+        plt.figure(figsize=(4,4), dpi=120)
+        plt.boxplot([IQ_diff_dosage, IQ_diff_gene, IQ_diff_mean], labels = ["dosamge", "gene", "mean"])
+        plt.ylabel("Nonverbal IQ difference")
+        plt.grid(True)
+        plt.show()
+        print(scipy.stats.mannwhitneyu(IQ_diff_dosage, IQ_diff_mean, alternative='less'))
+        print(scipy.stats.mannwhitneyu(IQ_diff_dosage, IQ_diff_gene, alternative='less'))
+        print("Mean:\tDosage:%.3f\tGene:%.3f\tMean:%.3f"%(np.mean(IQ_diff_dosage), np.mean(IQ_diff_gene), np.mean(IQ_diff_mean)))
+        print("Median:\tDosage:%.3f\tGene:%.3f\tMean:%.3f"%(np.median(IQ_diff_dosage), np.median(IQ_diff_gene), np.median(IQ_diff_mean)))
+    #return df, IQ_diff_dosage, IQ_diff_gene, IQ_diff_mean
+    #print(np.mean(ALL_IQ), np.mean(IIQs), avg_IQ)
+    return df, pred_dosage, pred_gene, pred_mean, ALL_IQ
+
+
+##############################################################################
+# Parse GTF format for gene/transcripts/exons
+##############################################################################
+class GTFRecord:
+    def __init__(self, Chr, source, Type, start, end, strand, info):
+        self.Chr = Chr
+        self.source = source
+        self.Type = Type
+        self.start = start
+        self.end = end
+        self.strand = strand
+        self.info = info
+
+class GTFGene:
+    def __init__(self, GeneName, GeneID, strand):
+        self.GeneName = GeneName
+        self.GeneID = GeneID
+        self.strand = strand
+        self.Transcripts = {}
+
+class GTFTranscript:
+    def __init__(self, gene, TranscriptID, TranscriptName, strand):
+        self.TranscriptID = TranscriptID
+        self.TranscriptName = TranscriptName
+        self.GeneName = gene
+        self.Exons = []
+        self.strand = strand
+    def LastExonJunction(self): # Interval of last exon and 2nd-last 55nt EEJ, tuple of tuple
+        if self.strand == "+":
+            LEJ = (self.Exons[-2].end - 55, self.Exons[-2].end)
+            LE = (self.Exons[-1].start, self.Exons[-1].end)
+        elif self.strand == "-":
+            LEJ = (self.Exons[-2].start, self.Exons[-2].start + 55)
+            LE = (self.Exons[-1].start, self.Exons[-1].end)
+        return (LE, LEJ)
+
+class GTFExon:
+    def __init__(self, exon_id, start, end, TranscriptID, strand):
+        self.ExonID = exon_id
+        self.TranscriptID = TranscriptID
+        self.start = int(start)
+        self.end = int(end)
+        self.strand = strand
+
+def gtf_info_parser(info):
+    res = {}
+    for term in info.split(";"):
+        if term == "":
+            continue
+        # print(">",term)
+        key, v = term.split()
+        v = v.strip('"')
+        res[key] = v
+    return res
+
+def LoadGeneCode(genecodefil):
+    Genes = {}
+    Transcripts = {}
+    hand = open(genecodefil, 'rt')
+    for l in hand:
+        if l.startswith("#"):
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        if llist[2] == "gene":
+            Genes[info["gene_name"]] = GTFRecord(
+                llist[0], llist[1], llist[2], llist[3], llist[4], llist[6], info)
+            Transcripts[info["gene_name"]] = []
+        elif llist[2] == "transcript":
+            if info["gene_name"] not in Genes:
+                Genes[info["gene_name"]] = GTFRecord(
+                    llist[0], llist[1], llist[2], llist[3], llist[4], llist[6], info)
+                Transcripts[info["gene_name"]] = []
+            Transcripts[info["gene_name"]].append(
+                GTFRecord(llist[0], llist[1], llist[2], llist[3], llist[4], llist[6], info))
+    return Genes, Transcripts
+
+##############################################################################
+# Variance Explained for GLM and same exon prediction
+##############################################################################
+
+def VarianceExplained(Predictions, TrueValues):
+    TSS = sum([(x-y)**2 for x,y in zip(TrueValues, [np.mean(TrueValues)]*len(TrueValues))])
+    SSR = sum([(x-y)**2 for x,y in zip(TrueValues, Predictions)])
+    #print(SSR, TSS)
+    R2_mean = 1- SSR/TSS
+    return R2_mean
+
+def SameExonPred(df, target="NVIQ"):
+    ExonCount = df.groupby("ExonID")["ExonID"].count()
+    df["ExonCount"] = df.apply(lambda row: ExonCount[row["ExonID"]], axis=1)
+    SameExon = df[df["ExonCount"]>=2]
+    SameExonPredictErr = []
+    SameExonPredictions = []
+    SameExonTarget = []
+    new_dfs = []
+    for i, row in SameExon.iterrows():
+        ExonID = row["ExonID"]
+        #subdf = SameExon[(SameExon["ExonID"]==ExonID) & (SameExon["familyId"]!=row["familyId"])
+        #               & (SameExon["gender"]==row["gender"])]
+        subdf = SameExon[(SameExon["ExonID"]==ExonID) & (SameExon["familyId"]!=row["familyId"])]
+        if subdf.shape[0] == 0:
+            continue
+        new_dfs.append(row)
+        _Pred = np.mean(SameExon[(SameExon["ExonID"]==ExonID)&(SameExon["familyId"]!=row["familyId"])][target].values)
+        _Target = row[target]
+        SameExonPredictErr.append(abs(_Pred-_Target))
+        SameExonPredictions.append(_Pred)
+        SameExonTarget.append(_Target)
+    NewSameExon = pd.DataFrame(new_dfs)
+    return SameExonPredictions, SameExonTarget, SameExonPredictErr, NewSameExon
+
+def llllll(Intercept, AllDF, TestingDF, aim="NVIQ"):
+    TestingDat = TestingDF
+    TrainingDat = AllDF[~AllDF["KEY"].isin(TestingDat["KEY"].values)]
+    Xlabels = ["ExonPrenatalExp.amean", "ExonPostnatalExp.amean", "phyloP100way", "Functional", "DOM.TRUNC"]
+    #Xlabels = [x+".transform" for x in Xlabels]
+    X_train = np.reshape(np.array(TrainingDat[Xlabels[0]].values), (-1,1))
+    #X_train = max(X_train) - X_train
+    X_test = np.reshape(np.array(TestingDat[Xlabels[0]].values), (-1,1))
+    #X_test = max(X_test) - X_test
+    if Intercept:
+        const_train = np.reshape(np.ones(X_train.shape[0]),(-1,1))
+        X_train = np.hstack((const_train, X_train))
+        const_test = np.reshape(np.ones(X_test.shape[0]),(-1,1))
+        X_test = np.hstack((const_test, X_test))
+    for i in range(1, len(Xlabels)):
+        x_train = np.reshape(np.array(TrainingDat[Xlabels[i]].values), (-1,1))
+        #x_train = max(x_train) - x_train
+        X_train = np.hstack((X_train, x_train))
+        x_test = np.reshape(np.array(TestingDat[Xlabels[i]].values), (-1,1))
+        #x_test = max(x_test) - x_test
+        X_test = np.hstack((X_test, x_test))
+    Y_train = np.reshape(np.array(TrainingDat[aim].values), (-1, 1))
+    Y_test = np.reshape(np.array(TestingDat[aim].values), (-1, 1))
+    glm = sm.GLM(Y_train, X_train, family=sm.families.Gaussian())
+    res = glm.fit()
+    pred_train = res.predict(X_train)
+    #print(X_test.shape, X_train.shape)
+    pred_test = res.predict(X_test)
+    GLM_err = [abs(x-y) for x,y in zip(pred_test, Y_test)]
+    GLM_err = [x[0] for x in GLM_err]
+    return res, GLM_err, pred_test, Y_test
+
+def PlotScatter4R2(SEP, SET, GLMP, GLMT, title):
+    fig, axs = plt.subplots(1,2, figsize=(9,4))
+    axs[0].scatter(SEP, SET)
+    axs[0].plot([0,100],[0,100], color="black")
+    axs[0].text(10, 90, "r=%.3f p=%.2e"%(pearsonr(SEP, SET)))
+    axs[0].text(10, 85, "R2=%.3f"%VarianceExplained(SEP, SET))
+    axs[1].scatter(GLMP, GLMT)
+    axs[1].plot([0,100],[0,100], color="black")
+    axs[1].text(10, 90, "r=%.3f p=%.2e"%(pearsonr([x for x in GLMP], [x[0] for x in GLMT])))
+    axs[1].text(10, 85, "R2=%.3f"%VarianceExplained(GLMP, GLMT))
+    axs[0].set_ylabel(title)
+    axs[0].set_xlabel("Same Exon predicted %s"%title)
+    #axs[1].set_ylabel("NVIQ")
+    axs[1].set_xlabel("GLM predicted %s"%title)
+    plt.show()
+
+def PredERRORwithP():
+    plt.figure(figsize=(4,4), dpi=120)
+    plt.boxplot([SameExonNVIQPredictErr, GLM_err1, GLM_err2], labels = ["same exom", "GLM w/ b0", "GLM w/o b0"])
+
+    t1, p1 = scipy.stats.wilcoxon(SameExonNVIQPredictErr, GLM_err1)
+    t2, p2 = scipy.stats.mannwhitneyu(SameExonNVIQPredictErr, GLM_err1, alternative='less')
+    x1, x2 = 1,2
+    y,h =35, 2
+    col='black'
+    plt.plot([x1, x1, x2, x2], [y, y+h, y+h, y], lw=1.5, c=col)
+    #plt.text((x1+x2)*.5, y+h, "p=%.3e(mwu)"%(p2), ha='center', va='bottom', color=col)
+    plt.text((x1+x2)*.5, y+h, "p=%.3e(wilcoxon)"%(p1/2), ha='center', va='bottom', color=col)
+
+    t1, p1 = scipy.stats.wilcoxon(SameExonNVIQPredictErr, GLM_err2)
+    t2, p2 = scipy.stats.mannwhitneyu(SameExonNVIQPredictErr, GLM_err2, alternative='less')
+    x1, x2 = 1,3
+    y,h =60, 2
+    col='black'
+    plt.plot([x1, x1, x2, x2], [y, y+h, y+h, y], lw=1.5, c=col)
+    #plt.text((x1+x2)*.5, y+h, "p=%.3e(mwu)"%(p2), ha='center', va='bottom', color=col)
+    plt.text((x1+x2)*.5, y+h, "p=%.3e(wilcoxon)"%(p1/2), ha='center', va='bottom', color=col)
+
+    plt.ylabel("Nonverbal IQ difference")
+    plt.grid(True)
+    plt.title("NVIQ prediction error")
+    plt.show()
+
