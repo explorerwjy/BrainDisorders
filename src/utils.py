@@ -16,6 +16,7 @@ import re
 import statsmodels.api as sm
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
+import itertools
 
 _nsre = re.compile('([0-9]+)')
 def natural_sort_key(s):
@@ -2375,6 +2376,28 @@ def LoadGeneCode(genecodefil):
                 GTFRecord(llist[0], llist[1], llist[2], llist[3], llist[4], llist[6], info))
     return Genes, Transcripts
 
+def isLEJ(Gene, Pos, Ref, Alt, Genes):
+    Pos, LenV = int(Pos), len(Ref)-len(Alt)
+    gene_obj = Genes[Gene]
+    count1, count2, count3 = 0, 0, 0
+    for transid, transobj in gene_obj.Transcripts.items():
+        if len(transobj.Exons) >= 2:
+            count1 += 1
+            interval1, interval2 = transobj.LastExonJunction()
+            if (Pos > interval1[0] and Pos < interval1[1]):
+                count2 += 1
+            elif(Pos > interval2[0] and Pos < interval2[1]):
+                count3 += 1
+    if count2 != 0:
+        isle = 'T'
+    else:
+        isle = "F"
+    if count3 != 0:
+        islej = 'T'
+    else:
+        islej = 'F'
+    return "{}/{}".format(count2+count3, count1), isle, islej
+
 ##############################################################################
 # Variance Explained for GLM and same exon prediction
 ##############################################################################
@@ -2414,11 +2437,8 @@ def llllll(Intercept, AllDF, TestingDF, aim="NVIQ"):
     TestingDat = TestingDF
     TrainingDat = AllDF[~AllDF["KEY"].isin(TestingDat["KEY"].values)]
     Xlabels = ["ExonPrenatalExp.amean", "ExonPostnatalExp.amean", "phyloP100way", "Functional", "DOM.TRUNC"]
-    #Xlabels = [x+".transform" for x in Xlabels]
     X_train = np.reshape(np.array(TrainingDat[Xlabels[0]].values), (-1,1))
-    #X_train = max(X_train) - X_train
     X_test = np.reshape(np.array(TestingDat[Xlabels[0]].values), (-1,1))
-    #X_test = max(X_test) - X_test
     if Intercept:
         const_train = np.reshape(np.ones(X_train.shape[0]),(-1,1))
         X_train = np.hstack((const_train, X_train))
@@ -2426,10 +2446,8 @@ def llllll(Intercept, AllDF, TestingDF, aim="NVIQ"):
         X_test = np.hstack((const_test, X_test))
     for i in range(1, len(Xlabels)):
         x_train = np.reshape(np.array(TrainingDat[Xlabels[i]].values), (-1,1))
-        #x_train = max(x_train) - x_train
         X_train = np.hstack((X_train, x_train))
         x_test = np.reshape(np.array(TestingDat[Xlabels[i]].values), (-1,1))
-        #x_test = max(x_test) - x_test
         X_test = np.hstack((X_test, x_test))
     Y_train = np.reshape(np.array(TrainingDat[aim].values), (-1, 1))
     Y_test = np.reshape(np.array(TestingDat[aim].values), (-1, 1))
@@ -2440,7 +2458,7 @@ def llllll(Intercept, AllDF, TestingDF, aim="NVIQ"):
     pred_test = res.predict(X_test)
     GLM_err = [abs(x-y) for x,y in zip(pred_test, Y_test)]
     GLM_err = [x[0] for x in GLM_err]
-    return res, GLM_err, pred_test, Y_test
+    return res, GLM_err, pred_test, Y_test, pred_train, Y_train
 
 def PlotScatter4R2(SEP, SET, GLMP, GLMT, title):
     fig, axs = plt.subplots(1,2, figsize=(9,4))
@@ -2485,3 +2503,255 @@ def PredERRORwithP():
     plt.title("NVIQ prediction error")
     plt.show()
 
+def PreProcessTranscripTPM(SelectedSamples, SelectedGenes):
+    csv.field_size_limit(sys.maxsize)
+    reader = csv.reader(open("../data/GTEx/GTEx_Analysis_2016-01-15_v7_RSEMv1.2.22_transcript_tpm.txt", 'rt'), delimiter="\t")
+    writer = csv.writer(open("../data/GTEx/GTEx_180Indiv_transcript_tpm.txt", 'wt'), delimiter="\t")
+    header = next(reader)
+    indices = []
+    new_header = header[:2]
+    for i,xx in enumerate(header[2:]):
+        #doner = xx.split("-")[1]
+        #if doner in Doners:
+        if xx in SelectedSamples:
+            indices.append(i+2)
+            new_header.append(xx)
+    writer.writerow(new_header)
+    for row in reader:
+        new_row = [row[0].split(".")[0], row[1].split(".")[0]]
+        if new_row[1] not in SelectedGenes:
+            continue
+        for i in indices:
+            new_row.append(row[i])
+        writer.writerow(new_row)
+
+def PreProcessGeneTPM(SelectedSamples, SelectedGenes):
+    csv.field_size_limit(sys.maxsize)
+    #reader = csv.reader(open("../data/GTEx/GTEx_Analysis_2016-01-15_v7_RNASeQCv1.1.8_gene_tpm.gct", 'rt'), delimiter="\t")
+    reader = csv.reader(open("../data/GTEx/GTEx_Analysis_2016-01-15_v7_RNASeQCv1.1.8_gene_reads.gct", 'rt'), delimiter="\t")
+    writer = csv.writer(open("../data/GTEx/GTEx_180Indiv_gene_rc.txt", 'wt'), delimiter="\t")
+    header = next(reader)
+    indices = []
+    new_header = header[:2]
+    for i,xx in enumerate(header[2:]):
+        if xx in SelectedSamples:
+            indices.append(i+2)
+            new_header.append(xx)
+    writer.writerow(new_header)
+    for row in reader:
+        new_row = [row[0].split(".")[0], row[1].split(".")[0]]
+        if new_row[0] not in SelectedGenes:
+            continue
+        for i in indices:
+            new_row.append(row[i])
+        writer.writerow(new_row)
+
+def PreProcessExonTPM(SelectedSamples, SelectedGenes):
+    csv.field_size_limit(sys.maxsize)
+    reader = csv.reader(open("../data/GTEx/GTEx_Analysis_2016-01-15_v7_RNASeQCv1.1.8_exon_reads.csv", 'rt'), delimiter=",")
+    writer = csv.writer(open("../data/GTEx/GTEx_180Indiv_exon_rc.txt", 'wt'), delimiter="\t")
+    header = next(reader)
+    indices = []
+    new_header = header[:1]
+    for i,xx in enumerate(header[1:-1]):
+        #doner = xx.split("-")[1]
+        #if doner in Doners:
+        if xx in SelectedSamples:
+            indices.append(i+2)
+            new_header.append(xx)
+    new_header.append(header[-1])
+    indices.append(-1)
+    writer.writerow(new_header)
+    for row in reader:
+        new_row = [row[0]]
+        #print(row[-1])
+        if row[-1].split(".")[0] not in SelectedGenes:
+            continue
+        for i in indices:
+            new_row.append(row[i])
+        writer.writerow(new_row)
+
+def GTExTranscriptSimilarity(GTExTransTPM, GTEx_LGDs, GTExSample, EnsGeneID, Tissue):
+    Gene_LGDs = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==EnsGeneID]
+    WithLGDSamples = Gene_LGDs["INDV"].values
+    WithLGDDoners = [x.split("-")[1] for x in WithLGDSamples]
+    TissueWithLGD = GTExSample[(GTExSample["Doner"].isin(WithLGDDoners)) & (GTExSample["SMTS"]==Tissue)]
+    TPMDat = GTExTransTPM[GTExTransTPM["gene_id"]==EnsGeneID]
+    if TPMDat.shape[0] == 0:
+        return None
+    ExpDat = GTExSample[GTExSample["SMTS"]==Tissue]
+    SameExon, DiffExon = [], []
+    for row1, row2 in itertools.combinations(Gene_LGDs.iterrows(), r=2):
+        try:
+            row1, row2 = row1[1], row2[1]
+            #doner1, doner2 = row1["INDV"].split("-")[1], row2["INDV"].split("-")[1]
+            doner1, doner2 = row1["INDV"].split("-")[1], row2["INDV"].split("-")[1]
+            #print(doner1, doner2)
+            sp1 = ExpDat[ExpDat["Doner"]==doner1]["SAMPID"].values
+            sp2 = ExpDat[ExpDat["Doner"]==doner2]["SAMPID"].values
+            #print(sp1, sp2)
+            if len(sp1) == 0 or len(sp2) == 0:
+                continue
+            V1, V2 = [], []
+            for i, row in TPMDat.iterrows():
+                exp1, exp2 = [], []
+                for sp in sp1:
+                    exp1.append(row[sp])
+                for sp in sp2:
+                    exp2.append(row[sp])
+                exp1 = np.mean(exp1)
+                exp2 = np.mean(exp2)
+                V1.append(exp1)
+                V2.append(exp2)
+            #print(V1, V2)
+            AngularDis = AngularDistance(V1, V2)
+            if set(row1["Exons"].split(";")).intersection(set(row2["Exons"].split(";"))) != set([]):
+                if AngularDis == AngularDis:
+                    SameExon.append(AngularDis)
+            else:
+                if AngularDis == AngularDis:
+                    DiffExon.append(AngularDis)
+        except:
+            #print(EnsGeneID)
+            pass
+    return SameExon, DiffExon
+
+def AngularDistance(V1, V2):
+    return (2/math.pi) * math.acos(1-scipy.spatial.distance.cosine(V1, V2))
+
+def GTExGeneSimilarity(GTExGenesTPM, GTEx_LGDs, GTExSample, EnsGeneID, Tissue):
+    # Compare exp diff between same exon / diff exon
+    Gene_LGDs = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==Gene]
+    WithLGDSamples = Gene_LGDs["INDV"].values
+    TissueWithLGD = SelectedTissueSamples[(SelectedTissueSamples["Doner"].isin(WithLGDDoners)) &  (SelectedTissueSamples["SMTS"]==Tissue)]
+    XXX = GeneTPM[GeneTPM["Description"]==EnsGeneID]
+    if XXX.shape[0] == 0:
+        return None
+    ExpDat = SelectedTissueSamples[SelectedTissueSamples["SMTS"]==Tissue]
+    Log2ExpOfGeneTissue = []
+    for sp in ExpDat["SAMPID"].values:
+        Log2ExpOfGeneTissue.append(XXX[sp])
+    Log2ExpOfGeneTissue = [math.log2(x+1) for x in Log2ExpOfGeneTissue]
+    GeneTissueMean = np.mean(Log2ExpOfGeneTissue)
+    GeneTissueStd = np.std(Log2ExpOfGeneTissue)
+    VarinGene = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE_NAME"]==Gene]
+    SameExon, DiffExon = [], []
+    for row1, row2 in itertools.combinations(VarinGene.iterrows(), r=2):
+        row1,row2 = row1[1], row2[1]
+        doner1, doner2 = row1["INDV"].split("-")[1], row2["INDV"].split("-")[1]
+        sp1 = ExpDat[ExpDat["Doner"]==doner1]["SAMPID"].values
+        sp2 = ExpDat[ExpDat["Doner"]==doner2]["SAMPID"].values
+        if len(sp1) == 0 or len(sp2) == 0:
+            continue
+        exp1, exp2 = [], []
+        for sp in sp1:
+            exp1.append(math.log2(XXX[sp]+1))
+        for sp in sp2:
+            exp2.append(math.log2(XXX[sp]+1))
+        exp1 = (np.mean(exp1) - GeneTissueMean)/GeneTissueStd
+        exp2 = (np.mean(exp2) - GeneTissueMean)/GeneTissueStd
+        if row1["Exons"] == row2["Exons"]:
+            SameExon.append(abs(exp1-exp2))
+        else:
+            DiffExon.append(abs(exp1-exp2))
+
+#def TPMScalingFactor
+
+#def ExonReadCount2TPM():
+
+def RPKM(ReadCount, Length, Libsize):
+    ReadCount = float(ReadCount)
+    return (ReadCount * 1e9) / (Libsize*Length)
+
+def GeneRC2RPKM(LibsizeDict, GenesizeDict):
+    reader = csv.reader(open("../data/GTEx/GTEx_180Indiv_gene_rc.txt", 'rt'), delimiter="\t")
+    writer = csv.writer(open("../data/GTEx/GTEx_180Indiv_gene_rpkm.txt", 'wt'), delimiter="\t")
+    header = next(reader)
+    writer.writerow(header)
+    for row in reader:
+        new_row = [row[0].split(".")[0], row[1] ]
+        for i, SP in enumerate(header[2:]):
+            libsize = LibsizeDict[SP]
+            genesize = GenesizeDict[row[0].split(".")[0]]
+            rpkm = round(RPKM(row[i+2], genesize, libsize), 2)
+            new_row.append(rpkm)
+        writer.writerow(new_row)
+
+def ExonRC2RPKM(LibsizeDict, ExonsizeDict):
+    reader = csv.reader(open("../data/GTEx/GTEx_180Indiv_exon_rc.txt", 'rt'), delimiter="\t")
+    writer = csv.writer(open("../data/GTEx/GTEx_180Indiv_exon_rpkm.txt", 'wt'), delimiter="\t")
+    header = next(reader)
+    writer.writerow(header)
+    for row in reader:
+        new_row = [row[0].split(".")[0] ]
+        for i, SP in enumerate(header[1:-1]):
+            libsize = LibsizeDict[SP]
+            exonsize = ExonsizeDict[row[-1]]
+            rpkm = round(RPKM(row[i+1], exonsize, libsize), 2)
+            new_row.append(rpkm)
+        new_row.append(row[-1])
+        writer.writerow(new_row)
+
+def searchExon_GTExExon(Gene, Pos, Ref, Alt, gtx_exon):
+    Pos, LenV = int(Pos), len(Ref)-len(Alt)
+    gene_obj = gtx_exon[gtx_exon["Gene"]==Gene]
+    _Exons, Transcripts = [],[]
+    for i, row in gene_obj.iterrows():
+        start, end = row["start_pos"], row["end_pos"]
+        if Pos > start -3 and Pos < end +3:
+            return row["exon_id"]
+        elif LenV > 0:
+            if (Pos < start-3 and Pos + LenV > start ) or (Pos < end and Pos + LenV > end +3):
+                return row["exon_id"]
+    return "NA"
+
+
+def RelativeExonExp2GeneExp(GeneRPKM, SelectedTissueSamples, ExonRPKM, GTEx_LGDs, Genes, Tissue):
+    ALL_EXON_REL, ALL_GENE_ZSCORE = [], []
+    for EnsGeneID in Genes:
+        Gene_LGDs = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==EnsGeneID]
+        WithLGDSamples = Gene_LGDs["INDV"].values
+        WithLGDDoners = set([x.split("-")[1] for x in WithLGDSamples])
+        TissueWithLGD = SelectedTissueSamples[(SelectedTissueSamples["Doner"].isin(WithLGDDoners)) &  (SelectedTissueSamples["SMTS"]==Tissue)]
+        _GeneRPKM = GeneRPKM[GeneRPKM["Name"]==EnsGeneID]
+        if _GeneRPKM.shape[0] == 0:
+            continue
+        ExpDat = SelectedTissueSamples[SelectedTissueSamples["SMTS"]==Tissue]
+        Log2ExpOfGeneTissue = []
+        for sp in ExpDat["SAMPID"].values:
+            Log2ExpOfGeneTissue.append(_GeneRPKM[sp])
+        Log2ExpOfGeneTissue = [math.log2(x+1) for x in Log2ExpOfGeneTissue]
+        GeneTissueMean = np.mean(Log2ExpOfGeneTissue)
+        GeneTissueStd = np.std(Log2ExpOfGeneTissue)
+        VarinGene = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==EnsGeneID]
+        for i, row in VarinGene.iterrows():
+            _ExonRPKM = ExonRPKM[ExonRPKM["Name"]==row["GTExExonID"]]
+            if _ExonRPKM.shape[0] == 0:
+                continue
+            doner = row["INDV"].split("-")[1]
+            samples = ExpDat[ExpDat["Doner"]==doner]["SAMPID"].values
+            if len(samples) == 0:
+                continue
+            gene_exps = []
+            exon_exps = []
+            for sp in samples:
+                gene_exps.append(math.log2(_GeneRPKM[sp]+1))
+                exon_exps.append(math.log2(_ExonRPKM[sp]+1))
+            exon_rel_exp = np.mean(exon_exps) / np.mean(gene_exps)
+            gene_exp_zscore = (np.mean(gene_exps) - GeneTissueMean)/GeneTissueStd
+            if exon_rel_exp == exon_rel_exp and gene_exp_zscore == gene_exp_zscore:
+                ALL_EXON_REL.append(exon_rel_exp)
+                ALL_GENE_ZSCORE.append(gene_exp_zscore)
+    return ALL_EXON_REL, ALL_GENE_ZSCORE
+
+def movingaverage (values, window):
+    weights = np.repeat(1.0, window)/window
+    sma = np.convolve(values, weights, 'valid')
+    return sma 
+
+def movingaverage(interval, window_size):
+    window= np.ones(int(window_size))/float(window_size)
+    return np.convolve(interval, window, 'same')
+
+def mymovingaverage(interval, window_size):
+    pass
