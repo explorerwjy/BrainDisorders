@@ -17,6 +17,7 @@ import statsmodels.api as sm
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
 import itertools
+import mygene
 
 _nsre = re.compile('([0-9]+)')
 def natural_sort_key(s):
@@ -47,6 +48,19 @@ andy_znf = "/Users/jiayao/Work/BrainDisorders/JW/Functional_Cluster_Gene_Lists/C
 
 
 Stages = ["2A", "2B", "3A", "3B"] + [str(x) for x in range(4,12)]
+
+VEP_LGD = ['frameshift_variant',
+ 'frameshift_variant,splice_region_variant',
+ 'splice_acceptor_variant',
+ 'splice_donor_variant',
+ 'splice_donor_variant,coding_sequence_variant',
+ 'splice_donor_variant,coding_sequence_variant,intron_variant',
+ 'start_lost',
+ 'stop_gained',
+ 'stop_gained,frameshift_variant',
+ 'stop_gained,splice_region_variant',
+ 'stop_lost',
+ 'stop_lost,inframe_deletion']
 
 class H2Analysis:
     def __init__(self):
@@ -815,6 +829,65 @@ class BrainSpan:
             bp_exon_row_meta_rep.at[i, "Func"] = self.AssignFunc(gene, Cates)
         bp_exon_row_meta_rep.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
         return bp_exon_row_meta_rep
+    def AssignVar2Exon6(self, bp_exon_row_meta, VarFile, IntersectionWithPredicted = True, ProSib="Pro"):
+        VarDF = pd.read_excel(VarFile)
+        # Load annotations to gene
+        entrez_symbol_map = get_gene_entrez_symbol_map()
+        wigler_predicted_lgd_genes = set([entrez_symbol_map[x.strip()] for x in file(wigler_predicted_lgd)])
+        fam_info = pd.read_excel(wigler_fam_info)
+
+        res = {} # k:gene v:list of variants in that gene
+        var_genders = {}
+        var_IQ = {}
+        for i, row in VarDF.iterrows():
+            if IntersectionWithPredicted:
+                if row["effectGene"] not in wigler_predicted_lgd_genes:
+                    continue
+            # Get Variant Info
+            gene, fam, var = row["effectGene"], rwo["familyId"], row["vcfVariant"]
+            key = fam + "-" + var 
+            if gene not in res:
+                res[gene] = [row["location"]]
+            else:
+                res[gene].append(row["location"])
+            # Get Gender Info
+            if var not in var_genders:
+                if ProSib == 'Pro':
+                    var_genders[var] = row["inChild"][:2]
+                else:
+                    var_genders[var] = row["inChild"][-2:]
+                #var_genders[var] = [row["inChild"][:2]]
+            else:
+                if ProSib == 'Pro':
+                    var_genders[var] = var_genders[var] + ";" + row["inChild"][:2]
+                else:
+                    var_genders[var] = var_genders[var] + ";" + row["inChild"][-2:]
+            # Get IQ Info
+            if var not in var_IQ:
+                FamID = row["familyId"]
+                var_IQ[var] = (famID2VIQ[FamID],famID2NVIQ[FamID])
+        bp_exon_row_meta_rep = bp_exon_row_meta.copy(deep=True)
+        bp_exon_row_meta_rep["Vars"] = ""
+        bp_exon_row_meta_rep["GeneHited"] = "F"
+        for i, row in bp_exon_row_meta_rep.iterrows():
+            sys.stdout.write("\r{}".format(i))
+            gene = row["gene_symbol"]
+            if gene not in res:
+                continue
+            bp_exon_row_meta_rep.at[i, "GeneHited"] = "T"
+            start, end = int(row["start"]) - 2 , int(row["end"]) + 2
+            gene = row["gene_symbol"]
+            # Assign Variant to Exon
+            for var in res[gene]:
+                pos = int(var.split(":")[1])
+                #print pos
+                if pos >= start and pos <= end: #Var In This Exon
+                    bp_exon_row_meta_rep.at[i, "Vars"] = bp_exon_row_meta_rep.get_value(i, "Vars") + ";" + var if bp_exon_row_meta_rep.get_value(i, "Vars") != "" else var
+                    continue
+            # Assign Other Info
+        bp_exon_row_meta_rep.at[i, "Last"] = "T" #Last Exon in DF is last exon of that gene
+        return bp_exon_row_meta_rep
+
     def LookMutationTargetedExon(self, Gene, structure_acronyms, bp_exon_row_meta, bp_exon_col_meta, ExonExp, GeneDat=None, smooth=True, drop_low_exp=True, fontsize=6):
         Exons = bp_exon_row_meta[bp_exon_row_meta["gene_symbol"]==Gene]
         GeneExonExp = ExonExp[ExonExp[0].isin(list(Exons["row_num"]))]
@@ -1361,7 +1434,7 @@ class BrainSpan:
 
     def LoadGeneSetData2Fil(self, FilName, Genes, Regions, Exon_row_meta, Exon_col_meta, Matrix):
         #Regions_indice
-        writer = csv.writer(open(FilName, 'wb'))
+        writer = csv.writer(open(FilName, 'wt'))
         print ("Total Num of Genes:", len(Genes))
         for i, gene in enumerate(Genes):
             ExonIDs = Exon_row_meta[Exon_row_meta["gene_symbol"]==gene]["row_num"].values
@@ -1381,7 +1454,7 @@ class BrainSpan:
     # Similar to previous func, gene stage instead of gene exon stage
     def LoadGeneSetData2Fil2(self, FilName, Genes, Regions, row_meta, col_meta, Matrix):
         #Regions_indice
-        writer = csv.writer(open(FilName, 'wb'))
+        writer = csv.writer(open(FilName, 'wt'))
         print ("Total Num of Genes:", len(Genes))
         for i, gene in enumerate(Genes):
             #ExonIDs = Exon_row_meta[Exon_row_meta["gene_symbol"]==gene]["row_num"].values
@@ -1401,12 +1474,13 @@ class BrainSpan:
 
     def LoadGeneSetDataFromFil(self, FilName):
         res = {}
-        fin = open(FilName, 'rb')
+        fin = open(FilName, 'rt')
         for l in fin:
             llist = l.strip().split(",")
             Gene, Exon, time = llist[:3]
             Exon = int(Exon)
-            exps = map(float, llist[3:])
+            #exps = map(float, llist[3:])
+            exps = [float(x) for x in llist[3:]]
             if Gene not in res:
                 res[Gene] = {}
             if Exon not in res[Gene]:
@@ -1418,11 +1492,12 @@ class BrainSpan:
 
     def LoadGeneSetDataFromFil2(self, FilName):
         res = {}
-        fin = open(FilName, 'rb')
+        fin = open(FilName, 'rt')
         for l in fin:
             llist = l.strip().split(",")
             Gene, time = llist[:2]
-            exps = map(float, llist[2:])
+            #exps = map(float, llist[2:])
+            exps = [float(x) for x in llist[2:]]
             if Gene not in res:
                 res[Gene] = {}
             if time not in res[Gene]:
@@ -2144,7 +2219,7 @@ class variant:
 
 def loaddict():
     res = {}
-    fin = open("/Users/jiayao/Work/BrainDisorders/src/cds.dict", 'rb')
+    fin = open("/Users/jiayao/Work/BrainDisorders/src/cds.dict", 'rt')
     for l in fin:
         llist = l.strip().split()
         gene, exon_s, cds_s, cds_e = llist[0], int(llist[1])-1, int(llist[2])-1, int(llist[3])
@@ -2324,18 +2399,33 @@ class GTFTranscript:
         self.TranscriptID = TranscriptID
         self.TranscriptName = TranscriptName
         self.GeneName = gene
-        self.Exons = []
+        self.Exons = {}
         self.strand = strand
+    def SortExons(self):
+        self.ExonSeq = []
+        if self.strand == "+":
+            self.ExonSeq = sorted(self.Exons.values(), key=lambda x:x.start)
+        else:
+            self.ExonSeq = sorted(self.Exons.values(), key=lambda x:x.start, reverse=True)
     def LastExonJunction(self): # Interval of last exon and 2nd-last 55nt EEJ, tuple of tuple
         if self.strand == "+":
-            LEJ = (self.Exons[-2].end - 55, self.Exons[-2].end)
-            LE = (self.Exons[-1].start, self.Exons[-1].end)
+            LEJ = (self.ExonSeq[-2].end - 55, self.ExonSeq[-2].end)
+            LE = (self.ExonSeq[-1].start, self.ExonSeq[-1].end)
         elif self.strand == "-":
-            LEJ = (self.Exons[-2].start, self.Exons[-2].start + 55)
-            LE = (self.Exons[-1].start, self.Exons[-1].end)
+            LEJ = (self.ExonSeq[-2].start, self.ExonSeq[-2].start + 55)
+            LE = (self.ExonSeq[-1].start, self.ExonSeq[-1].end)
         return (LE, LEJ)
 
 class GTFExon:
+    def __init__(self, exon_id, start, end, TranscriptID, strand):
+        self.ExonID = exon_id
+        self.TranscriptID = TranscriptID
+        self.start = int(start)
+        self.end = int(end)
+        self.strand = strand
+        self.cds = None
+
+class GTFCDS:
     def __init__(self, exon_id, start, end, TranscriptID, strand):
         self.ExonID = exon_id
         self.TranscriptID = TranscriptID
@@ -2503,6 +2593,11 @@ def PredERRORwithP():
     plt.title("NVIQ prediction error")
     plt.show()
 
+
+##############################################################################
+# GTEx 
+##############################################################################
+
 def PreProcessTranscripTPM(SelectedSamples, SelectedGenes):
     csv.field_size_limit(sys.maxsize)
     reader = csv.reader(open("../data/GTEx/GTEx_Analysis_2016-01-15_v7_RSEMv1.2.22_transcript_tpm.txt", 'rt'), delimiter="\t")
@@ -2557,7 +2652,7 @@ def PreProcessExonTPM(SelectedSamples, SelectedGenes):
         #doner = xx.split("-")[1]
         #if doner in Doners:
         if xx in SelectedSamples:
-            indices.append(i+2)
+            indices.append(i+1)
             new_header.append(xx)
     new_header.append(header[-1])
     indices.append(-1)
@@ -2655,10 +2750,6 @@ def GTExGeneSimilarity(GTExGenesTPM, GTEx_LGDs, GTExSample, EnsGeneID, Tissue):
         else:
             DiffExon.append(abs(exp1-exp2))
 
-#def TPMScalingFactor
-
-#def ExonReadCount2TPM():
-
 def RPKM(ReadCount, Length, Libsize):
     ReadCount = float(ReadCount)
     return (ReadCount * 1e9) / (Libsize*Length)
@@ -2705,6 +2796,25 @@ def searchExon_GTExExon(Gene, Pos, Ref, Alt, gtx_exon):
                 return row["exon_id"]
     return "NA"
 
+def searchExon_BrainSpan(Gene, Chr, Pos, Ref, Alt, ExonRow, ExonCol):
+    Pos, LenV = int(Pos), len(Ref)-len(Alt)
+    ExonRow = ExonRow[ExonRow["gene_symbol"]==Gene]
+    ith = 1
+    for i, row in ExonRow.iterrows():
+        row_num, start, end = row["row_num"],int(row["start"]),int(row["end"])
+        if Pos > start -3 and Pos < end + 3:
+            if ith == ExonRow.shape[0]:
+                return row_num
+            else:
+                return row_num
+        elif LenV > 0: # a delition may span a splice site
+            if (Pos < start-3 and Pos + LenV > start ) or (Pos < end and Pos + LenV > end +3):
+                if ith == ExonRow.shape[0]:
+                    return row_num
+                else:
+                    return row_num
+        ith += 1
+    return 0
 
 def RelativeExonExp2GeneExp(GeneRPKM, SelectedTissueSamples, ExonRPKM, GTEx_LGDs, Genes, Tissue):
     ALL_EXON_REL, ALL_GENE_ZSCORE = [], []
@@ -2712,24 +2822,24 @@ def RelativeExonExp2GeneExp(GeneRPKM, SelectedTissueSamples, ExonRPKM, GTEx_LGDs
         Gene_LGDs = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==EnsGeneID]
         WithLGDSamples = Gene_LGDs["INDV"].values
         WithLGDDoners = set([x.split("-")[1] for x in WithLGDSamples])
-        TissueWithLGD = SelectedTissueSamples[(SelectedTissueSamples["Doner"].isin(WithLGDDoners)) &  (SelectedTissueSamples["SMTS"]==Tissue)]
-        _GeneRPKM = GeneRPKM[GeneRPKM["Name"]==EnsGeneID]
+        #TissueWithLGD = SelectedTissueSamples[(SelectedTissueSamples["Doner"].isin(WithLGDDoners)) &  (SelectedTissueSamples["SMTS"]==Tissue)]
+        _GeneRPKM = GeneRPKM[GeneRPKM["Name"]==EnsGeneID] # RPKM of selected Gene
         if _GeneRPKM.shape[0] == 0:
             continue
-        ExpDat = SelectedTissueSamples[SelectedTissueSamples["SMTS"]==Tissue]
+        ExpDat = SelectedTissueSamples[SelectedTissueSamples["SMTS"]==Tissue] # GTEx meta data of selected Tissue
         Log2ExpOfGeneTissue = []
         for sp in ExpDat["SAMPID"].values:
             Log2ExpOfGeneTissue.append(_GeneRPKM[sp])
         Log2ExpOfGeneTissue = [math.log2(x+1) for x in Log2ExpOfGeneTissue]
         GeneTissueMean = np.mean(Log2ExpOfGeneTissue)
         GeneTissueStd = np.std(Log2ExpOfGeneTissue)
-        VarinGene = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==EnsGeneID]
+        VarinGene = GTEx_LGDs[GTEx_LGDs["SEVERE_GENE"]==EnsGeneID] # Mutation in selected Gene
         for i, row in VarinGene.iterrows():
             _ExonRPKM = ExonRPKM[ExonRPKM["Name"]==row["GTExExonID"]]
             if _ExonRPKM.shape[0] == 0:
                 continue
             doner = row["INDV"].split("-")[1]
-            samples = ExpDat[ExpDat["Doner"]==doner]["SAMPID"].values
+            samples = ExpDat[ExpDat["Doner"]==doner]["SAMPID"].values # all samples from the doner and selected Tissue
             if len(samples) == 0:
                 continue
             gene_exps = []
@@ -2738,20 +2848,942 @@ def RelativeExonExp2GeneExp(GeneRPKM, SelectedTissueSamples, ExonRPKM, GTEx_LGDs
                 gene_exps.append(math.log2(_GeneRPKM[sp]+1))
                 exon_exps.append(math.log2(_ExonRPKM[sp]+1))
             exon_rel_exp = np.mean(exon_exps) / np.mean(gene_exps)
+            #exon_rel_exp = np.mean(exon_exps) / GeneTissueMean 
             gene_exp_zscore = (np.mean(gene_exps) - GeneTissueMean)/GeneTissueStd
             if exon_rel_exp == exon_rel_exp and gene_exp_zscore == gene_exp_zscore:
                 ALL_EXON_REL.append(exon_rel_exp)
                 ALL_GENE_ZSCORE.append(gene_exp_zscore)
     return ALL_EXON_REL, ALL_GENE_ZSCORE
 
-def movingaverage (values, window):
-    weights = np.repeat(1.0, window)/window
-    sma = np.convolve(values, weights, 'valid')
-    return sma 
+##############################################################################
+# AA distance; Frac.Trunc; Phenotypic Diff
+##############################################################################
 
-def movingaverage(interval, window_size):
-    window= np.ones(int(window_size))/float(window_size)
-    return np.convolve(interval, window, 'same')
+def LoadGTF(FileName):
+    GTFTree = {}
+    hand = open(FileName, 'rt')
+    for l in hand:
+        if l.startswith("#"):
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        CHR = llist[0].lstrip("chr")
+        strand = llist[6]
+        start = int(llist[3])
+        end = int(llist[4])
+        if llist[2] == "gene":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"].split(".")[0]
+            GTFTree[gene_name] = GTFGene(gene_name, gene_id, strand)
+        elif llist[2] == "transcript":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"]
+            transcript_name = info["transcript_id"].split(".")[0]
+            transcript_id = info["transcript_id"].split(".")[0]
+            transcript_type = info["transcript_type"]
+            if transcript_id not in GTFTree[gene_name].Transcripts and transcript_type=="protein_coding":
+                GTFTree[gene_name].Transcripts[transcript_id] = GTFTranscript(gene_name, transcript_name, transcript_id, strand)
+        elif llist[2] == "exon":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"].split(".")[0]
+            exon_id = info["exon_id"].split(".")[0]
+            exon_number = info["exon_number"]
+            transcript_name = info["transcript_id"].split(".")[0]
+            transcript_id = info["transcript_id"].split(".")[0]
+            transcript_type = info["transcript_type"]
+            if transcript_type=="protein_coding":
+                exon= GTFExon(exon_id, start, end, transcript_id, strand)
+                GTFTree[gene_name].Transcripts[transcript_id].Exons[exon_id] = exon
+        elif llist[2] == "CDS":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"].split(".")[0]
+            exon_id = info["exon_id"].split(".")[0]
+            exon_number = info["exon_number"]
+            transcript_name = info["transcript_id"].split(".")[0]
+            transcript_id = info["transcript_id"].split(".")[0]
+            transcript_type = info["transcript_type"]
+            if transcript_type=="protein_coding":
+                cds = GTFCDS(exon_id, start, end, transcript_id, strand)
+                GTFTree[gene_name].Transcripts[transcript_id].Exons[exon_id].cds = cds
+    return GTFTree
 
-def mymovingaverage(interval, window_size):
-    pass
+
+def annotatePP(row, location2pp):
+    vcfVariant = row["vcfVariant"]
+    Chr, Pos, Ref, Alt = vcfVariant.split(":")
+    Pos = int(Pos)
+    if "%s:%d"%(Chr, Pos) in location2pp:
+        return location2pp["%s:%d"%(Chr, Pos)]
+    elif "%s:%d"%(Chr, Pos+1) in location2pp:
+        return location2pp["%s:%d"%(Chr, Pos+1)]
+    elif "%s:%d"%(Chr, Pos-1) in location2pp:
+        return location2pp["%s:%d"%(Chr, Pos-1)]
+    else:
+        print("%s:%d"%(Chr, Pos))
+        return "NA"
+    
+def annotateTrans(row, location2trans):
+    vcfVariant = row["vcfVariant"]
+    Chr, Pos, Ref, Alt = vcfVariant.split(":")
+    Pos = int(Pos)
+    if "%s:%d"%(Chr, Pos) in location2trans:
+        return location2trans["%s:%d"%(Chr, Pos)]
+    elif "%s:%d"%(Chr, Pos+1) in location2trans:
+        return location2trans["%s:%d"%(Chr, Pos+1)]
+    elif "%s:%d"%(Chr, Pos-1) in location2trans:
+        return location2trans["%s:%d"%(Chr, Pos-1)]
+    else:
+        print("%s:%d"%(Chr, Pos))
+        return "NA"
+
+def searchAAPos(Pos, transobj):
+    strand = transobj.strand
+    Exons = transobj.ExonSeq
+    Total = 0
+    res = "NA"
+    if strand == "+":
+        exon = Exons[0]
+        cds = exon if exon.cds == None else exon.cds
+        last_start = cds.start
+        last_end = cds.end
+        Total += (last_end-last_start)
+        if Pos > last_start and Pos < last_end:
+            res = Pos - last_start
+        for exon in Exons[1:]:
+            cds = exon if exon.cds == None else exon.cds
+            if Pos > last_end and Pos < cds.start: #intron variant
+                res = Total 
+            elif Pos > cds.start and Pos < cds.end:
+                res = Pos - cds.start + Total
+            last_start, last_end = cds.start, cds.end
+            Total += (last_end-last_start)
+    else:
+        exon = Exons[0]
+        cds = exon if exon.cds == None else exon.cds
+        last_start = cds.start
+        last_end = cds.end
+        Total += (last_end-last_start)
+        if Pos > last_start and Pos < last_end:
+            res = last_end - Pos
+        for exon in Exons[1:]:
+            cds = exon if exon.cds == None else exon.cds
+            if Pos < last_start and Pos > cds.end: #intron variant
+                res = Total
+            elif Pos > cds.start and Pos < cds.end:
+                res = cds.end - Pos + Total
+            last_start, last_end = cds.start, cds.end
+            Total += (last_end-last_start)
+    return res, Total
+
+class DistPhenotype:
+    def __init__(self, dist, phenotype):
+        self.dist = dist
+        self.logdist = math.log10(dist+1)
+        self.phenotype = phenotype
+
+def get_smaller_P(obs, null):
+    count = 0
+    for i,v in enumerate(null):
+        if obs >= v:
+            count += 1
+    return float(count)/len(null)
+
+def GetPairsForAAdistPhenotype(RecGeneDF, phenotype="NVIQ"):
+    SameExonAA, SameExonIQ, DiffExonAA, DiffExonIQ = [], [], [], []
+    for gene in list(set(RecGeneDF["effectGene"])):
+        df = RecGeneDF[RecGeneDF["effectGene"]==gene]
+        for row1, row2 in itertools.combinations(df.iterrows(), r=2):
+            row1, row2 = row1[1], row2[1]
+            IQdiff = abs(row1[phenotype]-row2[phenotype])
+            PPdiff = abs(int(row1["ProteinPos"])-int(row2["ProteinPos"]))
+            if PPdiff == 0:
+                print(gene, row1["Transcript"], row1["vcfVariant"], row2["vcfVariant"])
+                continue
+            if row1["ExonID"] == row2["ExonID"]:
+                SameExonAA.append(PPdiff)
+                SameExonIQ.append(IQdiff)
+                #print(gene, PPdiff, IQdiff)
+            else:
+                DiffExonAA.append(PPdiff)
+                DiffExonIQ.append(IQdiff)
+    return SameExonAA, SameExonIQ, DiffExonAA, DiffExonIQ
+
+def AccetRejectSamplingForSameDiffExonAAdist(SameExonAA, SameExonPheno, DiffExonAA, DiffExonPheno, M = 20, N = 1000, SampleSetIncludeSameExon=False):
+    if SampleSetIncludeSameExon:
+        D1 = [math.log10(x) for x in SameExonAA]
+        D2 = [math.log10(x) for x in SameExonAA + DiffExonAA]
+        pairs = list(zip(SameExonAA, SameExonPheno)) + list(zip(DiffExonAA, DiffExonPheno))
+    else:
+        D1 = [math.log10(x) for x in SameExonAA]
+        D2 = [math.log10(x) for x in DiffExonAA]
+        pairs = list(zip(DiffExonAA, DiffExonPheno))
+    LogDist = []
+    for dist, IQ in pairs:
+        LogDist.append(DistPhenotype(dist, IQ))
+    mu1 = np.mean(D1)
+    std1 = np.std(D1)
+    #print(mu1, std1)
+    mu2 = np.mean(D2)
+    std2 = np.std(D2)
+    #print(mu2, std2)
+    f = lambda x : scipy.stats.norm.pdf(x, loc=mu1, scale=std1)
+    g = lambda x : scipy.stats.norm.pdf(x, loc=mu2, scale=std2)
+    AVGPhenoDiffs = []
+    AVG_dists = []
+    for i in range(N):
+        j = 0
+        x_samples = []
+        while j < len(SameExonPheno):
+            u = np.random.uniform(0, 1)
+            x_sample = np.random.choice(LogDist, size=1, replace=True)
+            if u < f(x_sample[0].logdist) / (M * g(x_sample[0].logdist)):
+                x_samples.append(x_sample)
+                j += 1
+        AVGPhenoDiffs.append(np.mean([dist[0].phenotype for dist in x_samples]))
+        AVG_dists.append(np.mean([dist[0].logdist for dist in x_samples]))
+        if i % 100 == 0:
+            sys.stdout.write("\r{}".format(i))
+    return AVGPhenoDiffs, AVG_dists
+
+
+def GetPairsForPheno1Pheno2(RecGeneDF, phenotype1="NVIQ", phenotype2="VIQ"):
+    SameExonAA, SameExonIQ, DiffExonAA, DiffExonIQ = [], [], [], []
+    for gene in list(set(RecGeneDF["effectGene"])):
+        df = RecGeneDF[RecGeneDF["effectGene"]==gene]
+        for row1, row2 in itertools.combinations(df.iterrows(), r=2):
+            row1, row2 = row1[1], row2[1]
+            IQdiff = abs(row1[phenotype]-row2[phenotype])
+            PPdiff = abs(int(row1["ProteinPos"])-int(row2["ProteinPos"]))
+            if PPdiff == 0:
+                print(gene, row1["Transcript"], row1["vcfVariant"], row2["vcfVariant"])
+                continue
+            if row1["ExonID"] == row2["ExonID"]:
+                SameExonAA.append(PPdiff)
+                SameExonIQ.append(IQdiff)
+                #print(gene, PPdiff, IQdiff)
+            else:
+                DiffExonAA.append(PPdiff)
+                DiffExonIQ.append(IQdiff)
+    return SameExonAA, SameExonIQ, DiffExonAA, DiffExonIQ
+
+def AccetRejectSamplingForPhenotypesRelationship(SameExonP1, SameExonP2, DiffExonP1, DiffExonP2, M = 20, N = 1000, SampleSetIncludeSameExon=False):
+    if SampleSetIncludeSameExon:
+        D1 = [x for x in SameExonP1]
+        D2 = [x for x in SameExonP1 + DiffExonP1]
+        pairs = list(zip(SameExonP1, SameExonP2)) + list(zip(DiffExonP1, DiffExonP2))
+    else:
+        D1 = [x for x in SameExonP1]
+        D2 = [x for x in DiffExonP1]
+        pairs = list(zip(DiffExonP1, DiffExonP2))
+    LogDist = []
+    for P1, P2 in pairs:
+        LogDist.append(DistPhenotype(P1, P2))
+    mu1 = np.mean(D1)
+    std1 = np.std(D1)
+    #print(mu1, std1)
+    mu2 = np.mean(D2)
+    std2 = np.std(D2)
+    #print(mu2, std2)
+    f = lambda x : scipy.stats.norm.pdf(x, loc=mu1, scale=std1)
+    g = lambda x : scipy.stats.norm.pdf(x, loc=mu2, scale=std2)
+    AVGPhenoDiffs = []
+    AVG_dists = []
+    for i in range(N):
+        j = 0
+        x_samples = []
+        while j < len(SameExonP1):
+            u = np.random.uniform(0, 1)
+            x_sample = np.random.choice(LogDist, size=1, replace=True)
+            if u < f(x_sample[0].dist) / (M * g(x_sample[0].dist)):
+                x_samples.append(x_sample)
+                j += 1
+        AVGPhenoDiffs.append(np.mean([dist[0].phenotype for dist in x_samples]))
+        AVG_dists.append(np.mean([dist[0].dist for dist in x_samples]))
+        if i % 100 == 0:
+            sys.stdout.write("\r{}".format(i))
+    return AVGPhenoDiffs, AVG_dists
+
+def SameExonDef1(DF):
+    SameExon = []
+    SameExonSameGender = []
+    SameGene = []
+    ALLPairs = []
+    for row1, row2 in itertools.combinations(DF.iterrows(), r=2):
+        row1,row2 = row1[1], row2[1]
+        score1 = row1["composite_standard_score"]
+        score2 = row2["composite_standard_score"]
+        diff = abs(score1-score2)
+        ALLPairs.append(diff)
+        if row1["genetic_status"] == row2["genetic_status"]:
+            SameGene.append(diff)
+            if row1["Exons"] == row2["Exons"]:
+                if row1["isLEJ"] == "T" or row2["isLEJ"] == "T":
+                    continue
+                SameExon.append(diff)
+                if row1["sex"] == row2["sex"]:
+                    SameExonSameGender.append(diff)
+    return SameExon, SameExonSameGender, SameGene, ALLPairs
+
+def SameExonDef2(DF):
+    SameExon = []
+    SameExonSameGender = []
+    SameGene = []
+    ALLPairs = []
+    for i, row in DF.iterrows():
+        sfari_id, sex, score, Exon, Gene = row["sfari_id"], row["sex"], row["composite_standard_score"], row["Exons"], row["genetic_status"]
+        OtherSameExon = DF[(DF["Exons"]==Exon) & (DF["sfari_id"]!=sfari_id)]
+        OtherSameGene = DF[(DF["genetic_status"]==Gene) & (DF["sfari_id"]!=sfari_id)]
+        OtherSameExonSameGender = OtherSameExon[OtherSameExon["sex"]==sex] 
+        ALLPairs.append(abs(score-np.mean(DF["composite_standard_score"].values)))
+        if OtherSameGene.shape[0] >= 1:
+            SameGene.append(abs(score-np.mean(OtherSameGene["composite_standard_score"].values)))
+        if OtherSameExon.shape[0] >= 1:
+            SameExon.append(abs(score-np.mean(OtherSameExon["composite_standard_score"].values)))
+        if OtherSameExonSameGender.shape[0] >= 1:
+            SameExonSameGender.append(abs(score-np.mean(OtherSameExonSameGender["composite_standard_score"].values)))
+    return SameExon, SameExonSameGender, SameGene, ALLPairs
+
+def PairSort(X, Y):
+    XY = zip(X, Y)
+    sorted_XY = sorted(XY, key=lambda x:x[0])
+    X, Y = [],[]
+    for x,y in sorted_XY:
+        if x == x and y==y:
+            X.append(x)
+            Y.append(y)
+    return XY, X, Y
+
+"""
+def MyMovingAVG(X, Y, StepSize, Overlap=0.5):
+    minX, maxX = min(X), max(X)
+    XY = zip(X, Y)
+    sorted_XY = sorted(XY)
+    #print(sorted_XY)
+    Xs, Ys = [], []
+    last_start = minX
+    last_end = last_start+Overlap*StepSize
+    last_mid = (last_start + last_end)/2
+    last_idx = 0
+    while 1:
+        start, end = last_mid, last_mid+StepSize
+        mid = (start + end)/2
+        if start > maxX:
+            break
+        while 1:
+            if sorted_XY[j][0] > mid:
+                tmp_idx = j
+            if sorted_XY[j][0] > end:
+                break
+            _XY.append(sorted_XY[j])
+            j += 1
+        last_idx = tmp_idx
+        last_mid 
+        Xs.append(mid)
+        Ys.append(np.mean([Y for X,Y in _XY]))
+    return Xs, Ys
+    for i in range(Nwindow):
+        _XY = sorted_XY[i*Nwindow:(i+1)*Nwindow]
+        _X = i * step
+        _Y = np.mean([Y for X,Y in _XY])
+        Xs.append(_X)
+        Ys.append(_Y)
+    return Xs, Ys
+"""
+
+def MyMovingAVG(X, Y, StepSize):
+    XY, X, Y = PairSort(X,Y)
+    step = 0
+    res_X, res_Y = [], []
+    while 1:
+        if step > len(X):
+            break
+        X_ = X[step:step+StepSize]
+        Y_ = Y[step:step+StepSize]
+        res_X.append(np.mean(X_))
+        res_Y.append(np.mean(Y_))
+        #res_X.append(np.median(X_))
+        #res_Y.append(np.median(Y_))
+        step += StepSize
+    return res_X, res_Y
+
+def SSC_LGD_2_VCF(DF):
+    def vcfVariant(row):
+        return row["vcfVariant"].split(":")
+    DF["Chr"] = DF.apply(lambda row:vcfVariant(row)[0], axis=1)
+    DF["Pos"] = DF.apply(lambda row:vcfVariant(row)[1], axis=1)
+    DF["RSID"] = DF["KEY"]
+    DF["Ref"] = DF.apply(lambda row:vcfVariant(row)[2], axis=1)
+    DF["Alt"] = DF.apply(lambda row:vcfVariant(row)[3], axis=1)
+    DF = DF[["Chr", "Pos", "RSID", "Ref", "Alt"]]
+    return DF
+
+
+##############################################################################
+# Burden of Developmental stages
+##############################################################################
+def SubSetBrainSpanData(GeneSet):
+    exon_row_meta = csv.reader(open("/Users/jiayao/Work/BrainDisorders/data/expression/brainspan/exons_matrix/rows_metadata.csv", 'rt'))
+    exon_exp = csv.reader(open("/Users/jiayao/Work/BrainDisorders/data/expression/brainspan/exons_matrix/qn_exons_matrix.csv", 'rt'))
+
+    subset_exon_row_mata = csv.writer(open("./brainspan/rows_metadata.csv", 'wt'))
+    subset_exon_exp = csv.writer(open("./brainspan/qn.exons_matrix.csv",'wt'))
+
+    exon_row_meta_head = next(exon_row_meta)
+    subset_exon_row_mata.writerow(exon_row_meta_head) 
+    for meta_row, exp_row in zip(exon_row_meta, exon_exp):
+        XX = dict(zip(exon_row_meta_head, meta_row))
+        #if XX["ensembl_gene_id"] in GeneSet:
+        if XX["gene_symbol"] in GeneSet:
+            subset_exon_row_mata.writerow(meta_row)
+            subset_exon_exp.writerow(exp_row)
+
+def MakeExonID(exon_row_meta):
+    #ALL_GENE = list(set(exon_row_meta["gene_symbol"]))
+    #for GENE in ALL_GENE:
+    #    df = exon_row_meta[exon_row_meta["gene_symbol"]]
+    LAST_GENE = None
+    for i, row in exon_row_meta.iterrows():
+        GENE = row["gene_symbol"]
+        if GENE != LAST_GENE:
+            idx = 1
+            LAST_GENE = GENE
+        else:
+            idx += 1
+        #EXONID = "_".join([GENE, str(idx)])
+        EXONID = "{}_{}".format(GENE, idx)
+        exon_row_meta.loc[i, "EXONID2"] = EXONID
+        if i % 100 == 0:
+           sys.stdout.write("\r{}".format(i)) 
+    return exon_row_meta 
+
+
+def GetExonExp(gene, ExonID, expdict, ins):
+    # expdict[gene][ExonID]
+    tmp = []
+    for stage in ins.Stages:
+        #tmp.append(np.mean([math.log2(1+x) for x in expdict[gene][ExonID][stage]]))
+        tmp.append(np.mean(expdict[gene][ExonID][stage]))
+    return tmp
+
+
+def GetGeneExpAndExonExp(ins):
+    gene_exp_dict = {}
+    for gene, exps in expdict_gene.items():
+        tmp = []
+        for stage in ins.Stages:
+            #tmp.append(np.mean([math.log2(1+x) for x in exps[stage]]))
+            tmp.append(np.mean(exps[stage]))
+        gene_exp_dict[gene] = tmp
+        #ExonID2Nmut = {}
+        #for i, row in bp_exon_row_meta_with_gene.iterrows():
+        #    exonid = row["row_num"]
+        #    Vars = row["Vars"]
+        #    if Vars != "":
+        #        N = len(Vars.split(";"))
+        #    else:
+        #        N = 0
+        #    ExonID2Nmut[exonid] = N
+
+class EXON:
+    def __init__(self, ID, ID2, Nmut, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, IQgt70=False, IQlt70=False):
+        self.ID = ID
+        self.ID2 = ID2
+        self.Nmut = Nmut
+        #self.geneExp = geneExp
+        self.exonExp = exonExp
+        self.CDSLength = exonCDS
+        self.CDSLength2 = exonCDS2
+        self.CDSLength3 = exonCDS3
+        self.ralExp = []
+        self.IQgt70 = IQgt70
+        self.IQlt70 = IQlt70
+        #self.relbias = np.mean(self.exonExp[:6]) / np.mean(self.exonExp[6:])
+        self.relbias = np.mean(self.exonExp[:6]) - np.mean(self.exonExp[6:])
+        if self.relbias < -10:
+            self.relbias = -10
+        if self.relbias > 10:
+            self.relbias = 10
+
+
+def PoolTheExons(ins, expdict_gene, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0):
+    ExonPool = []
+    TargetedExonSet = set(VarFile["ExonID"].values)
+    IQgt70ExonSet = set(VarFile[VarFile["NVIQ"]> 70]["ExonID"].values)
+    IQlt70ExonSet = set(VarFile[VarFile["NVIQ"]<=70]["ExonID"].values)
+    ExonCount = VarFile.groupby("ExonID")["ExonID"].count()
+    #for gene in list(set(VarFile["effectGene"].values)):
+    for gene in Genes:
+        df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["symbol"]==gene]
+        #for exonID in expdict_exon[gene].keys(): 
+        for i, row in df.iterrows():
+            geneExp = 0
+            exonExp = GetExonExp(gene, exonID, expdict_exon, ins)
+            exonCDS = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["cds length"].values[0]
+            exonID2 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["EXONID2"].values[0]
+            exonCDS2 = ExonID2Length[exonID2]
+            #exonCDS3 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["cds_length_3"].values[0]
+            exonCDS3 = exonCDS
+            if exonCDS3 != exonCDS3:
+                exonCDS3 = exonCDS
+            if exonID in TargetedExonSet:
+                Exon = EXON(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonCDS, exonCDS2, exonCDS3)
+                if exonID in IQgt70ExonSet:
+                    Exon.IQgt70 = True
+                if exonID in IQlt70ExonSet:
+                    Exon.IQlt70 = True
+            else:
+                Exon = EXON(exonID, exonID2, 0, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3)
+            if np.mean(Exon.exonExp) > minLog2RPKMplus1Cut:
+                ExonPool.append(Exon)
+    return ExonPool
+
+
+def MatchCDS3(JonCDS, exon_row_meta):
+    #JonCDS_GENEs = set(JonCDS["ensembl_gene_id"].values)
+    GeneSet = set(exon_row_meta["ensembl_gene_id"].values)
+    for gene in list(GeneSet):
+        GENESUBSET = exon_row_meta[exon_row_meta["ensembl_gene_id"]==gene]
+        CDSSUBBET = JonCDS[JonCDS["ensembl_gene_id"]==gene]
+        for i, row in GENESUBSET.iterrows():
+            start, end = row["start"], row["end"]
+            for j, row2 in CDSSUBBET.iterrows():
+                cds_start, cds_end = row2["genomic_coding_start"], row2["genomic_coding_end"]
+                if cds_start >= start and cds_end <= end: 
+                    cds_len = row2["cds_end"] - row2["cds_start"] + 1
+                    exon_row_meta.loc[i, "cds_length_3"] = cds_len 
+                    break
+    return exon_row_meta
+
+def GetExonTimeExp(EXON_EXP_RPKM, Stage2Idx, stat="mean", log2=False):
+    ExonID2EXP = {}
+    for i, row in EXON_EXP_RPKM.iterrows():
+        exonid = row[0]
+        exps = []
+        for stage in Stages:
+            exp = []
+            for idx in Stage2Idx[stage]:
+                if log2:
+                    exp.append(math.log2(row[idx]+1))
+                else:
+                    exp.append(row[idx])
+            if stat == "median":
+                exps.append(np.median(exp))
+            elif stat == "mean":
+                exps.append(np.mean(exp))
+        ExonID2EXP[exonid] = exps
+    return ExonID2EXP
+
+def PoolTheExons2(ins, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0):
+    ExonPool = []
+    TargetedExonSet = set(VarFile["ExonID"].values)
+    IQgt70ExonSet = set(VarFile[VarFile["NVIQ"]> 70]["ExonID"].values)
+    IQlt70ExonSet = set(VarFile[VarFile["NVIQ"]<=70]["ExonID"].values)
+    ExonCount = VarFile.groupby("ExonID")["ExonID"].count()
+    for gene in Genes:
+        geneExp = 0
+        df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["gene_symbol"]==gene]
+        for i, row in df.iterrows():
+            exonID = row["row_num"]
+            exonExp = expdict_exon[row["row_num"]]
+            exonCDS = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["cds length"].values[0]
+            exonID2 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["EXONID2"].values[0]
+            exonCDS2 = ExonID2Length[exonID2]
+            #exonCDS3 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["cds_length_3"].values[0]
+            exonCDS = exonCDS2
+            exonCDS3 = exonCDS2
+            #if exonCDS3 != exonCDS3:
+            #    exonCDS3 = exonCDS
+            if exonID in TargetedExonSet:
+                Exon = EXON(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonCDS, exonCDS2, exonCDS3)
+                if exonID in IQgt70ExonSet:
+                    Exon.IQgt70 = True
+                if exonID in IQlt70ExonSet:
+                    Exon.IQlt70 = True
+            else:
+                Exon = EXON(exonID, exonID2, 0, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3)
+            if np.mean(Exon.exonExp) >= minLog2RPKMplus1Cut:
+                ExonPool.append(Exon)
+    return ExonPool
+
+def LoadHighConfVarFil():
+    VarFile = pd.read_excel("/Users/jiayao/Work/BrainDisorders/data/DenovoVariants/wigler2014LGD.xlsx")
+    ASD_high_conf_df_ = [x.strip() for x in open(ASD_high_conf, 'rt')]
+    VarFile = VarFile[VarFile["effectGene"].isin(ASD_high_conf_df_)]
+    VarFile.loc[VarFile["effectGene"]=="KMT2E", "effectGene"] = "MLL5" #MLL5
+    VarFile.loc[VarFile["effectGene"]=="SKIDA1", "effectGene"] = "C10orf140" #MLL5
+    VarFile.loc[VarFile["effectGene"]=="KMT2A", "effectGene"] = "MLL" #MLL5 #
+    VarFile.loc[VarFile["effectGene"]=="KMT2C", "effectGene"] = "MLL3" #MLL5
+    wigler_fam_info = pd.read_excel("/Users/jiayao/Work/BrainDisorders/data/nature13908-s2/Supplementary_Table_1.xlsx")
+    famID2Gender = dict(zip(wigler_fam_info["familyId"].values, wigler_fam_info["probandGender"].values))
+    famID2VIQ = dict(zip(wigler_fam_info["familyId"].values, wigler_fam_info["probandVIQ"].values))
+    famID2NVIQ = dict(zip(wigler_fam_info["familyId"].values, wigler_fam_info["probandNVIQ"].values))
+    for i, row in VarFile.iterrows():
+        famid, gene, (Chr, Pos, Ref, Alt) = row["familyId"], row["effectGene"], row["vcfVariant"].split(":")
+        exonId = searchExon_BrainSpan(gene, Chr, Pos, Ref, Alt, bp_exon_row_meta, bp_exon_col_meta)
+        VarFile.loc[i, "ExonID"] = exonId
+        VarFile.loc[i, "Gender"] = famID2Gender[famid]
+        VarFile.loc[i, "VIQ"] = famID2VIQ[famid]
+        VarFile.loc[i, "NVIQ"] = famID2NVIQ[famid]
+
+
+def BinExon(ExonPool):
+    #ExonPool.sort(key=lambda x: x.relbias)
+    parts = []
+    step = int(len(ExonPool)/4)
+    #print (step)
+    ExonPool = sorted(ExonPool, key=lambda x: x.relbias, reverse=True)
+    for i in range(3):
+        parts.append(ExonPool[i*step:(i+1)*step])
+    parts.append(ExonPool[3*step:])
+    return parts
+
+
+def BinExon_UseAndyBin(ExonPool, ExonID2Part):
+    parts = [[],[],[],[]]
+    for exon in ExonPool:
+        if ExonID2Part[exon.ID2] == 'd':
+            parts[0].append(exon)
+        elif ExonID2Part[exon.ID2] == 'c':
+            parts[1].append(exon)
+        elif ExonID2Part[exon.ID2] == 'b':
+            parts[2].append(exon)
+        elif ExonID2Part[exon.ID2] == 'a':
+            parts[3].append(exon)
+    return parts
+
+def PlotExonBins(bins):
+    labels = ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]
+    for i in range(4):
+        allexonexp = []
+        for exon in bins[i]:
+            allexonexp.extend(exon.exonExp)
+        Mean = np.mean(allexonexp)
+        AvgExps, Errbars = [],[]
+        for j,stage in enumerate(Stages):
+            values = [x.exonExp[j] for x in bins[i]]
+            AvgExp = math.log2(np.mean(values)/Mean)
+            Errbar = np.std([math.log2(x/Mean+1) for x in values])/math.sqrt(len(values))
+            AvgExps.append(AvgExp)
+            Errbars.append(Errbar)
+        plt.errorbar(range(2,14), AvgExps, Errbars, label=labels[i])
+    plt.legend()
+    plt.show()
+
+def PlotExonHist(bins):
+    color=["blue", "orange","green","red"]
+    for i in range(4):
+        bias=[]
+        for exon in bins[i]:
+            #plt.plot(range(2,14), exon.exonExp)
+            bias.append(exon.relbias)
+        plt.hist(bias, bins=30, color=color[i], alpha=0.5, density=True)
+    plt.show()
+
+def ExonBinsBurden(parts):
+    Rates0 = []
+    Rates1 = []
+    Rates2 = []
+    OveralRate0,OveralRate1,OveralRate2 = 0,0,0
+    TotalMuts0, TotalMuts1, TotalMuts2 = 0,0,0
+    TotalCDS = 0
+    for i in range(4):
+        withLGD0 = sum([x.Nmut for x in parts[i]])
+        withLGD1 = sum([x.Nmut for x in parts[i] if x.IQgt70])
+        withLGD2 = sum([x.Nmut for x in parts[i] if x.IQlt70])
+
+        TotalMuts0 += withLGD0
+        TotalMuts1 += withLGD1
+        TotalMuts2 += withLGD2
+
+        Rates0.append(withLGD0/sum([x.CDSLength for x in parts[i]]))
+        Rates1.append(withLGD1/sum([x.CDSLength for x in parts[i]]))
+        Rates2.append(withLGD2/sum([x.CDSLength for x in parts[i]]))
+        
+
+        TotalCDS += sum([x.CDSLength for x in parts[i]])
+        #print(withLGD/sum([x.CDSLength for x in parts[i]]))
+        print(withLGD0, sum([x.CDSLength for x in parts[i]]))
+    OveralRate0 = TotalMuts0/TotalCDS
+    OveralRate1 = TotalMuts1/TotalCDS
+    OveralRate2 = TotalMuts2/TotalCDS
+    normedRate0 = []
+    for Rate, group in zip(Rates0, ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]):
+        xx = Rate/OveralRate0
+        normedRate0.append(xx)
+    plt.plot(normedRate0)
+    plt.show()
+    normedRate1 = []
+    normedRate2 = []
+    for Rate, group in zip(Rates1, ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]):
+        xx = Rate/OveralRate1
+        normedRate1.append(xx)
+    for Rate, group in zip(Rates2, ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]):
+        xx = Rate/OveralRate2
+        normedRate2.append(xx)
+    plt.plot(normedRate1, color="red", label="higher IQ")
+    plt.plot(normedRate2, color="blue", label="lower IQ")
+    plt.legend()
+    plt.show()
+
+##############################################################################
+# Burden of Developmental stages
+##############################################################################
+SVIPGenes = ["ASXL3","CHD2","CHD8","DSCAM","DYRK1A","FOXP1","HIVEP2","SCN2A","ADNP","CHAMP1","CSNK2A1","GRIN2B",
+        "HNRNPH2","MED13L","PACS1","PPP2R5D","SETBP1","STXBP1","SYNGAP1"]
+def LoadGenCodeTrans():
+    Gene2Trans = {}
+    hand = open("unifiedmodel/VIPgenes.gencode.v19.gtf", 'rt')
+    for l in hand:
+        if l.startswith("#"):
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        CHR = llist[0].lstrip("chr")
+        strand = llist[6]
+        start = (llist[3])
+        end = (llist[4])
+        if llist[2] == "transcript" and info["transcript_type"] == "protein_coding":
+            Gene2Trans[info["gene_name"]] = info["transcript_id"]
+    Gene2Trans["ASXL3"]="ENST00000269197.5"
+    Gene2Trans["CHD8"]="ENST00000399982.2"
+    Gene2Trans["DYRK1A"]="ENST00000339659.4"
+    Gene2Trans["CHD2"]="ENST00000394196.4"
+    Gene2Trans["SCN2A"]="ENST00000357398.3"
+    Gene2Trans["FOXP1"]="ENST00000318789.4"
+    Gene2Trans["HIVEP2"]="ENST00000367603.2"
+    Gene2Trans["PPP2R5D"]="ENST00000485511.1"
+    Gene2Trans["HIVEP2"]="ENST00000367603.2"
+    Gene2Trans["SYNGAP1"]="ENST00000418600.2"
+    Gene2Trans["STXBP1"]="ENST00000373302.3"
+    Gene2Trans["PACS1"]="ENST00000320580.4"
+    Gene2Trans["MED13L"]="ENST00000281928.3"
+    Gene2Trans["CHAMP1"]="ENST00000361283.1"
+    Gene2Trans["SETBP1"]="ENST00000282030.5"
+    Gene2Trans["CSNK2A1"]="ENST00000217244.3"
+    Gene2Trans["ADNP"]="ENST00000396029.3"
+    Gene2Trans["DSCAM"]="ENST00000400454.1"
+    Gene2Trans["HNRNPH2"]="ENST00000400454.1"
+    return Gene2Trans
+
+def LoadSSCCohort():
+    Jiayao_features = pd.read_csv("unifiedmodel/features.jiayao.65.csv")
+    df = Jiayao_features
+    for i, row in df.iterrows():
+        df.loc[i, "sfari_id"] = df.loc[i, "familyId"]
+        df.loc[i, "sex"] = df.loc[i, "gender"]
+        Chr, Pos, Ref, Alt = row["vcfVariant"].split(":")
+        Len = max(0, len(Ref) - len(Alt))
+        df.loc[i, "location"] = "{}:{}-{}".format(Chr, Pos, int(Pos)+Len)
+        df.loc[i, "inheritance_status"] = "de-novo"
+        df.loc[i, "genetic_status"] = row["effectGene"]
+        df.loc[i, "composite_standard_score"] = row["VABS"]
+        df.loc[i, "Cohort"] = "SSC"
+    SSC = df[["Cohort", "sfari_id","sex","genetic_status","inheritance_status","composite_standard_score","location"]]
+    return SSC
+
+def LoadVIPSingleGeneData(DIR):
+    dfs1 = []
+    dfs2 = []
+    for gene in SVIPGenes:
+        try:
+            df1 = pd.read_csv("/".join([DIR,gene,"vineland_ii.csv"]))
+            dfs1.append(df1)
+        except:
+            pass
+        try:
+            df2 = pd.read_csv("/".join([DIR,gene,"lab_results.csv"]))
+            dfs2.append(df2)
+        except:
+            pass
+    VABS_DF = pd.concat(dfs1)
+    LGD_DF = pd.concat(dfs2)
+    LGD_DF = LGD_DF[["sfari_id", "relationship_to_iip", "genetic_status","lab_results_single_hgvs"]]
+    LGD_DF = LGD_DF[LGD_DF["relationship_to_iip"]=="Initially identified proband"]
+    VABS_DF = VABS_DF[VABS_DF["relationship_to_iip"]=="Initially identified proband"]
+    LGD_DF = LGD_DF.dropna()
+    VABS_DF = VABS_DF[["sfari_id","sex","genetic_status","inheritance_status", "composite_standard_score"]]
+    VABS_DF = VABS_DF.reset_index(drop=True)
+    return VABS_DF, LGD_DF
+    
+def addHGVS(row, Gene2Trans):
+    Trans = Gene2Trans[row["genetic_status"]]
+    hgvs = row["lab_results_single_hgvs"]
+    hgvs = "c.{}".format(hgvs) if not (hgvs.startswith("c.")) else hgvs
+    return "{}:{}".format(Trans, hgvs)
+
+def CleanUpSVIPVEPData():
+    VEP = pd.read_csv("./data/SVIP.V6.Genes.HGVS.VEP.tsv", delimiter="\t")
+    Transcripts = [x for x in Gene2Trans.values()]
+    #LGDs = ['frameshift_variant', 'stop_gained', 'splice_donor_variant']
+    LGDs = VEP_LGD
+    VEP = VEP[(VEP["Feature"].isin(Transcripts)) & (VEP["Consequence"].isin(LGDs))]
+    VEP = VEP.drop_duplicates(subset="#Uploaded_variation", keep='first')
+    VEP.set_index("#Uploaded_variation", inplace=True)
+    VEP.to_csv("data/SVIP.V6.VEP.RecGenes.LGD.txt", sep="\t")
+
+def serachVEP(row, vip_hgvs, Gene2Trans, VEP):
+    transcript = Gene2Trans[row["genetic_status"]]
+    vip_hgvs = "c.{}".format(vip_hgvs) if not (vip_hgvs.startswith("c.")) else vip_hgvs
+    key = "{}:{}".format(transcript, vip_hgvs)
+    location = VEP.loc[key, "Location"]
+    return location
+
+def AnnotateVEP2VABSDF(VABS_DF, LGD_DF, Gene2Trans, VEP):
+    for i, row in VABS_DF.iterrows():
+        spid, gene = row["sfari_id"], row["genetic_status"]
+        vip_hgvs = LGD_DF[(LGD_DF["sfari_id"]==spid) & ((LGD_DF["genetic_status"]==gene))]
+        if vip_hgvs.shape[0] == 1:
+            vip_hgvs = vip_hgvs["lab_results_single_hgvs"].values[0]
+            try:
+                VABS_DF.at[i, "location"] = serachVEP(row, vip_hgvs, Gene2Trans, VEP)
+            except KeyError:
+                #print(vip_hgvs)
+                VABS_DF.at[i, "location"] = np.nan
+        else:
+            VABS_DF.at[i, "location"] = np.nan
+        VABS_DF.at[i, "sex"] = row["sex"][0].upper()
+    VABS_DF = VABS_DF.dropna()
+    return VABS_DF
+
+
+
+##############################################################################
+# Phenotypic Independence
+##############################################################################
+def RatioPermutationTest(Pairs, Phenotype1="NVIQ", Phenotype2="VABS", N1 = 60, N2 = 8, Npermute=1000):
+    Ratios, SelectedSamples = [],[]
+    i,j = 0,0
+    while i < Npermute:
+        j += 1
+        sp = np.random.choice(Pairs, N1)
+        First8 = sp[:N2]
+        Last60 = sp[N2:]
+        First8_NVIQ_DIFF = np.mean([x.NVIQ_DIFF for x in First8])
+        First8_VABS_DIFF = np.mean([x.VABS_DIFF for x in First8])
+        Last60_NVIQ_DIFF = np.mean([x.NVIQ_DIFF for x in Last60])
+        Last60_VABS_DIFF = np.mean([x.VABS_DIFF for x in Last60])
+        NVIQ_Ratio = First8_NVIQ_DIFF/Last60_NVIQ_DIFF
+        #print(NVIQ_Ratio)
+        if NVIQ_Ratio <= 0.4:
+            i += 1
+            Ratios.append(First8_VABS_DIFF/Last60_VABS_DIFF)
+            SelectedSamples.append(sp)
+    return Ratios, SelectedSamples
+
+def PlotHistAndP(Null, Obs):
+    n, bins, patches = plt.hist(Null, bins=20)
+    p = get_smaller_P(Obs, [0] + Null)
+    plt.vlines(x=Obs, ymin=0, ymax=max(n))
+    plt.text(x=Obs, y=max(n), s="p=%.3f"%p)
+    plt.show()
+
+
+def RatioPermutationTestNVIQvsVIQ(Pairs, N1 = 60, N2 = 8, Npermute=1000):
+    Ratios, SelectedSamples = [],[]
+    i,j = 0,0
+    while i < Npermute:
+        j += 1
+        sp = np.random.choice(Pairs, 60)
+        First8 = sp[:8]
+        Last60 = sp[8:]
+        First8_NVIQ_DIFF = np.mean([x.NVIQ_DIFF for x in First8])
+        First8_VIQ_DIFF = np.mean([x.VIQ_DIFF for x in First8])
+        Last60_NVIQ_DIFF = np.mean([x.NVIQ_DIFF for x in Last60])
+        Last60_VIQ_DIFF = np.mean([x.VIQ_DIFF for x in Last60])
+        NVIQ_Ratio = First8_NVIQ_DIFF/Last60_NVIQ_DIFF
+        #print(NVIQ_Ratio)
+        if NVIQ_Ratio <= 0.4:
+            i += 1
+            Ratios.append(First8_VIQ_DIFF/Last60_VIQ_DIFF)
+            SelectedSamples.append(sp)
+    return Ratios, SelectedSamples
+
+def RatioPermutationTestNVIQvsVIQ(Pairs, Phenotype1="NVIQ", Phenotype2="VABS", N1 = 60, N2 = 8, Npermute=1000):
+    Ratios, SelectedSamples = [],[]
+    i,j = 0,0
+    while i < Npermute:
+        j += 1
+        sp = np.random.choice(Pairs, 60)
+        First8 = sp[:N2]
+        Last60 = sp[N2:]
+        First8_NVIQ_DIFF = np.mean([x.NVIQ_DIFF for x in First8])
+        First8_VABS_DIFF = np.mean([x.VABS_DIFF for x in First8])
+        Last60_NVIQ_DIFF = np.mean([x.NVIQ_DIFF for x in Last60])
+        Last60_VABS_DIFF = np.mean([x.VABS_DIFF for x in Last60])
+        NVIQ_Ratio = First8_NVIQ_DIFF/Last60_NVIQ_DIFF
+        #print(NVIQ_Ratio)
+        if NVIQ_Ratio <= 0.4:
+            i += 1
+            Ratios.append(First8_VABS_DIFF/Last60_VABS_DIFF)
+            SelectedSamples.append(sp)
+    return Ratios, SelectedSamples
+
+
+##############################################################################
+# Frac. Isoform - normalized pheno
+##############################################################################
+def LoadGTF4FracIso():
+    Genes = {}
+    hand = open("unifiedmodel/RecLGDgenes.gencode.v19.gtf", 'rt')
+    for l in hand:
+        if l.startswith("#"):
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        CHR = llist[0].lstrip("chr")
+        strand = llist[6]
+        start = int(llist[3])
+        end = int(llist[4])
+        if llist[2] == "gene":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"]
+            Genes[gene_name] = GTFGene(gene_name, gene_id, strand)
+        elif llist[2] == "transcript":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"]
+            transcript_name = info["transcript_id"]
+            transcript_id = info["transcript_id"]
+            transcript_type = info["transcript_type"]
+            if transcript_id not in Genes[gene_name].Transcripts and transcript_type=="protein_coding":
+                Genes[gene_name].Transcripts[transcript_id] = GTFTranscript(gene_name, transcript_name, transcript_id, strand)
+        elif llist[2] == "exon":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"]
+            exon_id = info["exon_id"]
+            transcript_name = info["transcript_id"]
+            transcript_id = info["transcript_id"]
+            transcript_type = info["transcript_type"]
+            if transcript_type=="protein_coding":
+                exon= GTFExon(exon_id, start, end, transcript_id, strand)
+                Genes[gene_name].Transcripts[transcript_id].Exons.append(exon)
+    return Genes
+
+def searchExon4FracIso(Gene, Pos, Ref, Alt, Genes):
+    Pos, LenV = int(Pos), len(Ref)-len(Alt)
+    gene_obj = Genes[Gene]
+    _Exons, Transcripts = [],[]
+    for transid, transobj in gene_obj.Transcripts.items():
+        for exon in transobj.Exons:
+            if Pos > exon.start -3 and Pos < exon.end +3:
+                _Exons.append(exon.ExonID)
+                Transcripts.append(transid)
+                break
+            elif LenV > 0:
+                if (Pos < exon.start-3 and Pos + LenV > exon.start ) or (Pos < exon.end and Pos + LenV > exon.end +3):
+                    _Exons.append(exon.ExonID)
+                    Transcripts.append(transid)
+                    break
+    return list(set(_Exons)), list(set(Transcripts))
+
+def LoadVar4FracIso(Genes):
+    Jiayao_features = pd.read_csv("unifiedmodel/features.jiayao.csv")
+    Jiayao_features.loc[Jiayao_features["effectGene"]=="MLL5", "effectGene"] = "KMT2E"
+    Jiayao_features["Exons"] = ""
+    Jiayao_features["Transcripts"] = ""
+    for i, row in Jiayao_features.iterrows():
+        famid, gene, (Chr, Pos, Ref, Alt) = row["familyId"], row["effectGene"], row["vcfVariant"].split(":")
+        ExonIDs, TranscriptIDs = searchExon4FracIso(gene, Pos, Ref, Alt, Genes)
+        Jiayao_features.at[i, "Exons"] = ExonIDs
+        Jiayao_features.at[i, "Transcripts"] = TranscriptIDs
+    return Jiayao_features
+
