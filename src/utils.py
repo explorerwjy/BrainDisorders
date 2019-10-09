@@ -16,6 +16,10 @@ import re
 import statsmodels.api as sm
 from scipy.stats import pearsonr
 from scipy.stats import spearmanr
+from scipy.stats import binom
+from scipy.stats import beta
+from scipy.stats import halfcauchy
+from scipy.integrate import quad, dblquad
 import itertools
 import mygene
 
@@ -2374,6 +2378,29 @@ def DosageModel(df, SameGender=False, plot=True):
     return df, pred_dosage, pred_gene, pred_mean, ALL_IQ
 
 
+def csv2vcf(infname, outfname):
+    reader = csv.reader(open(infname, "rt"))
+    writer = csv.writer(open(outfname, "wt"), delimiter="\t")
+    writer.writerow(["##fileformat=VCFv4.2"])
+    writer.writerow(["#CHROM", "POS","ID","REF","ALT","QUAL","FILTER","INFO","FORMAT"])
+    head = next(reader)
+    idx_vcfVariant = head.index("vcfVariant") 
+    idx_key = head.index("KEY")
+    for row in reader:
+        vcfVariant = row[idx_vcfVariant]
+        Chr, Pos, Ref, Alt = vcfVariant.split(":")
+        llist = []
+        llist.append(Chr)
+        llist.append(Pos)
+        llist.append(row[idx_key])
+        llist.append(Ref)
+        llist.append(Alt)
+        llist.append(".")
+        llist.append(".")
+        llist.append(".")
+        llist.append(".")
+        writer.writerow(llist)
+
 ##############################################################################
 # Parse GTF format for gene/transcripts/exons
 ##############################################################################
@@ -2471,6 +2498,7 @@ def isLEJ(Gene, Pos, Ref, Alt, Genes):
     gene_obj = Genes[Gene]
     count1, count2, count3 = 0, 0, 0
     for transid, transobj in gene_obj.Transcripts.items():
+        transobj.SortExons()
         if len(transobj.Exons) >= 2:
             count1 += 1
             interval1, interval2 = transobj.LastExonJunction()
@@ -2487,6 +2515,19 @@ def isLEJ(Gene, Pos, Ref, Alt, Genes):
     else:
         islej = 'F'
     return "{}/{}".format(count2+count3, count1), isle, islej
+
+def subsetGTF(GTF, GENESET, outfile):
+    gtf = GTF
+    out = open(outfile, 'wt')
+    hand = open(gtf, 'rt')
+    for l in hand:
+        if l.startswith("#"):
+            out.write(l)
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        if info["gene_name"] in GENESET:
+            out.write(l)
 
 ##############################################################################
 # Variance Explained for GLM and same exon prediction
@@ -3190,7 +3231,7 @@ def MyMovingAVG(X, Y, StepSize, Overlap=0.5):
     return Xs, Ys
 """
 
-def MyMovingAVG(X, Y, StepSize):
+def MyMovingAVG(X, Y, StepSize, overlap=0):
     XY, X, Y = PairSort(X,Y)
     step = 0
     res_X, res_Y = [], []
@@ -3201,8 +3242,6 @@ def MyMovingAVG(X, Y, StepSize):
         Y_ = Y[step:step+StepSize]
         res_X.append(np.mean(X_))
         res_Y.append(np.mean(Y_))
-        #res_X.append(np.median(X_))
-        #res_Y.append(np.median(Y_))
         step += StepSize
     return res_X, res_Y
 
@@ -3221,19 +3260,37 @@ def SSC_LGD_2_VCF(DF):
 ##############################################################################
 # Burden of Developmental stages
 ##############################################################################
-def SubSetBrainSpanData(GeneSet):
+def SubSetBrainSpanData(GeneSet, ID="ensembl"):
     exon_row_meta = csv.reader(open("/Users/jiayao/Work/BrainDisorders/data/expression/brainspan/exons_matrix/rows_metadata.csv", 'rt'))
     exon_exp = csv.reader(open("/Users/jiayao/Work/BrainDisorders/data/expression/brainspan/exons_matrix/qn_exons_matrix.csv", 'rt'))
 
     subset_exon_row_mata = csv.writer(open("./brainspan/rows_metadata.csv", 'wt'))
-    subset_exon_exp = csv.writer(open("./brainspan/qn.exons_matrix.csv",'wt'))
+    subset_exon_exp = csv.writer(open("./brainspan/ssc.lgd.qn.exons_matrix.csv",'wt'))
 
     exon_row_meta_head = next(exon_row_meta)
     subset_exon_row_mata.writerow(exon_row_meta_head) 
     for meta_row, exp_row in zip(exon_row_meta, exon_exp):
         XX = dict(zip(exon_row_meta_head, meta_row))
-        #if XX["ensembl_gene_id"] in GeneSet:
-        if XX["gene_symbol"] in GeneSet:
+        #if 
+        if XX["ensembl_gene_id"] in GeneSet:
+        #if XX["gene_symbol"] in GeneSet:
+            subset_exon_row_mata.writerow(meta_row)
+            subset_exon_exp.writerow(exp_row)
+
+def SubSetBrainSpanDataGene(GeneSet, ID="ensembl"):
+    exon_row_meta = csv.reader(open("/Users/jiayao/Work/BrainDisorders/data/expression/brainspan/gene_matrix/rows_metadata.csv", 'rt'))
+    exon_exp = csv.reader(open("/Users/jiayao/Work/BrainDisorders/data/expression/brainspan/gene_matrix/qn.expression_matrix.csv", 'rt'))
+
+    subset_exon_row_mata = csv.writer(open("./brainspan/gene_rows_metadata.csv", 'wt'))
+    subset_exon_exp = csv.writer(open("./brainspan/ssc.lgd.qn.gene_matrix.csv",'wt'))
+
+    exon_row_meta_head = next(exon_row_meta)
+    subset_exon_row_mata.writerow(exon_row_meta_head) 
+    for meta_row, exp_row in zip(exon_row_meta, exon_exp):
+        XX = dict(zip(exon_row_meta_head, meta_row))
+        #if 
+        if XX["ensembl_gene_id"] in GeneSet:
+        #if XX["gene_symbol"] in GeneSet:
             subset_exon_row_mata.writerow(meta_row)
             subset_exon_exp.writerow(exp_row)
 
@@ -3243,7 +3300,8 @@ def MakeExonID(exon_row_meta):
     #    df = exon_row_meta[exon_row_meta["gene_symbol"]]
     LAST_GENE = None
     for i, row in exon_row_meta.iterrows():
-        GENE = row["gene_symbol"]
+        #GENE = row["gene_symbol"]
+        GENE = row["GENE.SYMBOL"]
         if GENE != LAST_GENE:
             idx = 1
             LAST_GENE = GENE
@@ -3285,7 +3343,7 @@ def GetGeneExpAndExonExp(ins):
         #    ExonID2Nmut[exonid] = N
 
 class EXON:
-    def __init__(self, ID, ID2, Nmut, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, IQgt70=False, IQlt70=False):
+    def __init__(self, ID, ID2, Nmut, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, IQgt70=False, IQlt70=False, biasmethod="-"):
         self.ID = ID
         self.ID2 = ID2
         self.Nmut = Nmut
@@ -3297,13 +3355,47 @@ class EXON:
         self.ralExp = []
         self.IQgt70 = IQgt70
         self.IQlt70 = IQlt70
-        #self.relbias = np.mean(self.exonExp[:6]) / np.mean(self.exonExp[6:])
-        self.relbias = np.mean(self.exonExp[:6]) - np.mean(self.exonExp[6:])
+        if biasmethod == "/":
+            if np.mean(self.exonExp[6:]) == 0:
+                self.relbias = 0
+            else:
+                self.relbias = np.mean(self.exonExp[:6]) / np.mean(self.exonExp[6:])
+        elif biasmethod == "-":
+            self.relbias = np.mean(self.exonExp[:6]) - np.mean(self.exonExp[6:])
         if self.relbias < -10:
             self.relbias = -10
         if self.relbias > 10:
             self.relbias = 10
 
+
+class EXON_mwu_bias:
+    def __init__(self, ID, ID2, Nmut, geneExp, exonExp, exonExp_tmp, exonCDS, IQgt70=False, IQlt70=False, biasmethod="-"):
+        self.ID = ID
+        self.ID2 = ID2
+        self.Nmut = Nmut
+        self.exonExp = exonExp # Prenatal/Postnatal: 0-236
+        self.exonExp_tmp = exonExp_tmp
+        self.CDSLength = exonCDS
+        self.IQgt70 = IQgt70
+        self.IQlt70 = IQlt70
+        self.prenatal_exps = self.exonExp[:237]
+        self.postnatal_exps = self.exonExp[237:]
+        if np.mean(self.postnatal_exps) != 0 :
+            t, p = scipy.stats.mannwhitneyu(self.prenatal_exps, self.postnatal_exps)
+            self.pvalue = p
+        else:
+            self.pvalue = 1
+        if biasmethod == "/":
+            if np.mean(self.exonExp[237:]) == 0:
+                self.relbias = 0
+            else:
+                self.relbias = np.mean(self.exonExp[:237]) / np.mean(self.exonExp[237:])
+        elif biasmethod == "-":
+            self.relbias = np.mean(self.exonExp[:237]) - np.mean(self.exonExp[237:])
+        if self.relbias < -10:
+            self.relbias = -10
+        if self.relbias > 10:
+            self.relbias = 10
 
 def PoolTheExons(ins, expdict_gene, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0):
     ExonPool = []
@@ -3373,7 +3465,46 @@ def GetExonTimeExp(EXON_EXP_RPKM, Stage2Idx, stat="mean", log2=False):
         ExonID2EXP[exonid] = exps
     return ExonID2EXP
 
-def PoolTheExons2(ins, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0):
+def GetExonTimeExp_mwu_bias(EXON_EXP_RPKM, log2=False):
+    ExonID2EXP = {}
+    for i, row in EXON_EXP_RPKM.iterrows():
+        exonid = row[0]
+        exps = list(row[1:])
+        if log2:
+            exps = [math.log2(1+x) for x in exps]
+        ExonID2EXP[exonid] = exps
+    return ExonID2EXP
+
+def GetGeneTimeExp(EXP_RPKM, Stage2Idx, stat="mean", log2=False):
+    ID2EXP = {}
+    for i, row in EXP_RPKM.iterrows():
+        geneid = row[0]
+        exps = []
+        for stage in Stages:
+            exp = []
+            for idx in Stage2Idx[stage]:
+                if log2:
+                    exp.append(math.log2(row[idx]+1))
+                else:
+                    exp.append(row[idx])
+            if stat == "median":
+                exps.append(np.median(exp))
+            elif stat == "mean":
+                exps.append(np.mean(exp))
+        ID2EXP[geneid] = exps
+    return ID2EXP
+
+def GetGeneTimeExp_mwu_bias(EXP_RPKM, log2=False):
+    ID2EXP = {}
+    for i, row in EXP_RPKM.iterrows():
+        geneid = row[0]
+        exps = list(row[1:])
+        if log2:
+            exps = [math.log2(1+x) for x in exps]
+        ID2EXP[geneid] = exps
+    return ID2EXP
+
+def PoolTheExons2(ins, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0, biasmethod="-"):
     ExonPool = []
     TargetedExonSet = set(VarFile["ExonID"].values)
     IQgt70ExonSet = set(VarFile[VarFile["NVIQ"]> 70]["ExonID"].values)
@@ -3381,7 +3512,8 @@ def PoolTheExons2(ins, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene,
     ExonCount = VarFile.groupby("ExonID")["ExonID"].count()
     for gene in Genes:
         geneExp = 0
-        df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["gene_symbol"]==gene]
+        #df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["gene_symbol"]==gene]
+        df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["ensembl_gene_id"]==gene]
         for i, row in df.iterrows():
             exonID = row["row_num"]
             exonExp = expdict_exon[row["row_num"]]
@@ -3394,13 +3526,207 @@ def PoolTheExons2(ins, expdict_exon, VarFile, Genes, bp_exon_row_meta_with_gene,
             #if exonCDS3 != exonCDS3:
             #    exonCDS3 = exonCDS
             if exonID in TargetedExonSet:
-                Exon = EXON(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonCDS, exonCDS2, exonCDS3)
+                if biasmethod == "-":
+                    Exon = EXON(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, biasmethod="-")
+                elif biasmethod == "/":
+                    Exon = EXON(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, biasmethod="/")
                 if exonID in IQgt70ExonSet:
                     Exon.IQgt70 = True
                 if exonID in IQlt70ExonSet:
                     Exon.IQlt70 = True
             else:
-                Exon = EXON(exonID, exonID2, 0, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3)
+                if biasmethod == "-":
+                    Exon = EXON(exonID, exonID2, 0, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, biasmethod="-")
+                elif biasmethod == "/":
+                    Exon = EXON(exonID, exonID2, 0, geneExp, exonExp, exonCDS, exonCDS2, exonCDS3, biasmethod="/")
+            #print(Exon.exonExp)
+            if np.mean(Exon.exonExp) >= minLog2RPKMplus1Cut:
+                ExonPool.append(Exon)
+    return ExonPool
+
+# expdict_exon : all 524 values
+def PoolTheExons2_mnw_bias(ins, expdict_exon, expdict_temporal_exon, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0, biasmethod="-"):
+    ExonPool = []
+    TargetedExonSet = set(VarFile["ExonID"].values)
+    IQgt70ExonSet = set(VarFile[VarFile["NVIQ"]> 70]["ExonID"].values)
+    IQlt70ExonSet = set(VarFile[VarFile["NVIQ"]<=70]["ExonID"].values)
+    ExonCount = VarFile.groupby("ExonID")["ExonID"].count()
+    for gene in Genes:
+        geneExp = 0
+        #df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["gene_symbol"]==gene]
+        df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["ensembl_gene_id"]==gene]
+        for i, row in df.iterrows():
+            exonID = row["row_num"]
+            exonExp = expdict_exon[row["row_num"]]
+            exonExp_tmp = expdict_temporal_exon[row["row_num"]]
+            exonCDS = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["cds length"].values[0]
+            exonID2 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["EXONID2"].values[0]
+            exonCDS2 = ExonID2Length[exonID2]
+            #exonCDS3 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["row_num"]==exonID]["cds_length_3"].values[0]
+            exonCDS = exonCDS2
+            if exonID in TargetedExonSet:
+                if biasmethod == "-":
+                    Exon = EXON_mwu_bias(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonExp_tmp, exonCDS, biasmethod="-")
+                elif biasmethod == "/":
+                    Exon = EXON_mwu_bias(exonID, exonID2, ExonCount[exonID], geneExp, exonExp, exonExp_tmp, exonCDS, biasmethod="/")
+                if exonID in IQgt70ExonSet:
+                    Exon.IQgt70 = True
+                if exonID in IQlt70ExonSet:
+                    Exon.IQlt70 = True
+            else:
+                if biasmethod == "-":
+                    Exon = EXON_mwu_bias(exonID, exonID2, 0, geneExp, exonExp, exonExp_tmp, exonCDS, biasmethod="-")
+                elif biasmethod == "/":
+                    Exon = EXON_mwu_bias(exonID, exonID2, 0, geneExp, exonExp, exonExp_tmp, exonCDS, biasmethod="/")
+            #print(Exon.exonExp)
+            if np.mean(Exon.exonExp) >= minLog2RPKMplus1Cut:
+                ExonPool.append(Exon)
+    return ExonPool
+
+class GENE_mwu_bias:
+    def __init__(self, ROWNUM, ENSID, SYMBOL, Nmut, geneExp, geneExp_tmp, geneCDS, IQgt70=False, IQlt70=False, biasmethod="-"):
+        self.id = ROWNUM
+        self.ensid = ENSID
+        self.symbol = SYMBOL
+        self.Nmut = Nmut
+        self.geneExp = geneExp # Prenatal/Postnatal: 0-236
+        self.geneExp_tmp = geneExp_tmp
+        self.CDSLength = geneCDS
+        self.IQgt70 = IQgt70
+        self.IQlt70 = IQlt70
+        self.prenatal_exps = self.geneExp[:237]
+        self.postnatal_exps = self.geneExp[237:]
+        if np.mean(self.postnatal_exps) != 0 :
+            #t, p = scipy.stats.mannwhitneyu(self.prenatal_exps, self.postnatal_exps, alternative="two-sided")
+            t, p = scipy.stats.mannwhitneyu(self.prenatal_exps, self.postnatal_exps)
+            self.pvalue = p
+        else:
+            self.pvalue = 1
+        if biasmethod == "/":
+            if np.mean(self.geneExp[237:]) == 0:
+                self.relbias = 0
+            else:
+                self.relbias = np.mean(self.geneExp[:237]) / np.mean(self.geneExp[237:])
+        elif biasmethod == "-":
+            self.relbias = np.mean(self.geneExp[:237]) - np.mean(self.geneExp[237:])
+        if self.relbias < -10:
+            self.relbias = -10
+        if self.relbias > 10:
+            self.relbias = 10
+
+def GetGeneCDS(bp_exon_row_meta, bp_gene_row_meta, exonid2cds):
+    GeneID2CDS = {}
+    for i, row in bp_gene_row_meta.iterrows():
+        gene = row["ensembl_gene_id"]
+        #df = bp_exon_row_meta[bp_exon_row_meta["gene_symbol"]==gene]
+        df = bp_exon_row_meta[bp_exon_row_meta["ensembl_gene_id"]==gene]
+        CDS = 0
+        for i, row in df.iterrows():
+            CDS += exonid2cds[row["EXONID2"]]
+        GeneID2CDS[gene] = CDS
+    return GeneID2CDS
+def GetGeneCDS2(bp_exon_row_meta, Genes, exonid2cds):
+    GeneID2CDS = {}
+    for gene in Genes:
+        #df = bp_exon_row_meta[bp_exon_row_meta["gene_symbol"]==gene]
+        df = bp_exon_row_meta[bp_exon_row_meta["ensembl_gene_id"]==gene]
+        CDS = 0
+        for i, row in df.iterrows():
+            CDS += exonid2cds[row["EXONID2"]]
+        GeneID2CDS[gene] = CDS
+    return GeneID2CDS
+
+def PoolTheGenes2_mnw_bias(ins, expdict_gene, expdict_temporal_gene, VarFile, Genes, bp_gene_row_meta, GeneID2Length, minLog2RPKMplus1Cut = 0, biasmethod="-"):
+    GenePool = []
+    TargetedGeneSet = set(VarFile["ENSGID"].values)
+    IQgt70GeneSet = set(VarFile[VarFile["NVIQ"]> 70]["ENSGID"].values)
+    IQlt70GeneSet = set(VarFile[VarFile["NVIQ"]<=70]["ENSGID"].values)
+    df1 = bp_gene_row_meta[bp_gene_row_meta["ensembl_gene_id"].isin(TargetedGeneSet)]
+    df2 = bp_gene_row_meta[~bp_gene_row_meta["ensembl_gene_id"].isin(TargetedGeneSet)]
+    #print(df.shape)
+    #GeneCount = VarFile.groupby("effectGene")["effectGene"].count()
+    GeneCount = VarFile.groupby("ENSGID")["ENSGID"].count()
+    for i, row in df1.iterrows():
+        ENSID = row["ensembl_gene_id"]
+        geneRowNum = row["row_num"] 
+        geneSymbol = row["gene_symbol"] 
+        #if geneSymbol == "MLL5":
+        #    geneSymbol = "KMT2E"
+        geneExp = expdict_gene[geneRowNum]
+        geneExp_tmp = expdict_temporal_gene[geneRowNum]
+        geneCDS = GeneID2Length[ENSID]
+        if biasmethod == "-":
+            Gene = GENE_mwu_bias(geneRowNum, ENSID, geneSymbol, GeneCount[ENSID], geneExp, geneExp_tmp, geneCDS, biasmethod="-")
+        elif biasmethod == "/":
+            Gene = GENE_mwu_bias(geneRowNum, ENSID, geneSymbol, GeneCount[ENSID], geneExp, geneExp_tmp, geneCDS, biasmethod="/")
+        if ENSID in IQgt70GeneSet:
+            Gene.IQgt70 = True
+        if ENSID in IQlt70GeneSet:
+            Gene.IQlt70 = True
+        if np.mean(Gene.geneExp) >= minLog2RPKMplus1Cut:
+            GenePool.append(Gene)
+    for i, row in df2.iterrows():
+        ENSID = row["ensembl_gene_id"]
+        geneRowNum = row["row_num"] 
+        geneSymbol = row["gene_symbol"] 
+        #if geneSymbol == "MLL5":
+        #    geneSymbol = "KMT2E"
+        geneExp = expdict_gene[geneRowNum]
+        geneExp_tmp = expdict_temporal_gene[geneRowNum]
+        geneCDS = GeneID2Length[ENSID]
+        if biasmethod == "-":
+            Gene = GENE_mwu_bias(geneRowNum, ENSID, geneSymbol, 0, geneExp, geneExp_tmp, geneCDS, biasmethod="-")
+        elif biasmethod == "/":
+            Gene = GENE_mwu_bias(geneRowNum, ENSID, geneSymbol, 0, geneExp, geneExp_tmp, geneCDS, biasmethod="/")
+        if ENSID in IQgt70GeneSet:
+            Gene.IQgt70 = True
+        if ENSID in IQlt70GeneSet:
+            Gene.IQlt70 = True
+        if np.mean(Gene.geneExp) >= minLog2RPKMplus1Cut:
+            GenePool.append(Gene)
+    return GenePool
+
+class EXON2:
+    def __init__(self, ID, ID2, Nmut, exonExp, exonCDS, IQgt70=False, IQlt70=False):
+        self.ID = ID
+        self.ID2 = ID2
+        self.Nmut = Nmut
+        self.exonExp = exonExp
+        self.CDSLength = exonCDS
+        self.IQgt70 = IQgt70
+        self.IQlt70 = IQlt70
+        self.relbias = np.mean(self.exonExp[:6]) - np.mean(self.exonExp[6:])
+        if self.relbias < -10:
+            self.relbias = -10
+        if self.relbias > 10:
+            self.relbias = 10
+
+def PoolTheExons3(ins, VarFile, Genes, bp_exon_row_meta_with_gene, ExonID2Length, minLog2RPKMplus1Cut = 0):
+    ExonPool = []
+    TargetedExonSet = set(VarFile["ExonID"].values)
+    IQgt70ExonSet = set(VarFile[VarFile["NVIQ"]> 70]["ExonID"].values)
+    IQlt70ExonSet = set(VarFile[VarFile["NVIQ"]<=70]["ExonID"].values)
+    ExonCount = VarFile.groupby("ExonID")["ExonID"].count()
+    for gene in Genes:
+        geneExp = 0
+        #df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["GENE.SYMBOL"]==gene]
+        df = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["gene_symbol"]==gene]
+        for i, row in df.iterrows():
+            exonID = row["ROW"]
+            #exonExp = expdict_exon[row["ROW"]]
+            exonExp = []
+            for xx in range(1,13):
+                exonExp.append(row["PERIOD.%d"%xx])
+            exonID2 = bp_exon_row_meta_with_gene[bp_exon_row_meta_with_gene["ROW"]==exonID]["EXONID2"].values[0]
+            exonCDS = ExonID2Length[exonID2]
+            if exonID in TargetedExonSet:
+                Exon = EXON2(exonID, exonID2, ExonCount[exonID], exonExp, exonCDS)
+                if exonID in IQgt70ExonSet:
+                    Exon.IQgt70 = True
+                if exonID in IQlt70ExonSet:
+                    Exon.IQlt70 = True
+            else:
+                Exon = EXON2(exonID, exonID2, 0, exonExp, exonCDS)
             if np.mean(Exon.exonExp) >= minLog2RPKMplus1Cut:
                 ExonPool.append(Exon)
     return ExonPool
@@ -3426,17 +3752,32 @@ def LoadHighConfVarFil():
         VarFile.loc[i, "NVIQ"] = famID2NVIQ[famid]
 
 
-def BinExon(ExonPool):
+def BinExon(ExonPool, Nbins=4):
     #ExonPool.sort(key=lambda x: x.relbias)
     parts = []
-    step = int(len(ExonPool)/4)
+    step = int(len(ExonPool)/Nbins)
     #print (step)
     ExonPool = sorted(ExonPool, key=lambda x: x.relbias, reverse=True)
-    for i in range(3):
+    for i in range(Nbins-1):
         parts.append(ExonPool[i*step:(i+1)*step])
-    parts.append(ExonPool[3*step:])
+    parts.append(ExonPool[(Nbins-1)*step:])
     return parts
 
+
+def BinExon_mwu_bias(ExonPool, cut = 1, Nbins=3, PvalueCut=0.05):
+    #ExonPool.sort(key=lambda x: x.relbias)
+    parts = [[],[],[]]
+    step = int(len(ExonPool)/Nbins)
+    #print (step)
+    #ExonPool = sorted(ExonPool, key=lambda x: x.pvalue, reverse=False)
+    for exon in ExonPool:
+        if exon.pvalue < PvalueCut and exon.relbias > cut:
+            parts[0].append(exon)
+        elif exon.pvalue < PvalueCut and exon.relbias < cut:
+            parts[2].append(exon)
+        else:
+            parts[1].append(exon)
+    return parts
 
 def BinExon_UseAndyBin(ExonPool, ExonID2Part):
     parts = [[],[],[],[]]
@@ -3451,16 +3792,23 @@ def BinExon_UseAndyBin(ExonPool, ExonID2Part):
             parts[3].append(exon)
     return parts
 
-def PlotExonBins(bins):
-    labels = ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]
-    for i in range(4):
+def PlotExonBins(bins, Nbins=4, gene=False):
+    #labels = ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]
+    labels = ["1","2","3","4"]
+    for i in range(Nbins):
         allexonexp = []
         for exon in bins[i]:
-            allexonexp.extend(exon.exonExp)
+            if gene:
+                allexonexp.extend(exon.geneExp_tmp)
+            else:
+                allexonexp.extend(exon.exonExp_tmp)
         Mean = np.mean(allexonexp)
         AvgExps, Errbars = [],[]
         for j,stage in enumerate(Stages):
-            values = [x.exonExp[j] for x in bins[i]]
+            if gene:
+                values = [x.geneExp_tmp[j] for x in bins[i]]
+            else:
+                values = [x.exonExp_tmp[j] for x in bins[i]]
             AvgExp = math.log2(np.mean(values)/Mean)
             Errbar = np.std([math.log2(x/Mean+1) for x in values])/math.sqrt(len(values))
             AvgExps.append(AvgExp)
@@ -3479,14 +3827,226 @@ def PlotExonHist(bins):
         plt.hist(bias, bins=30, color=color[i], alpha=0.5, density=True)
     plt.show()
 
-def ExonBinsBurden(parts):
+def GeneBinsBurden(parts, Nbins=3, Null="All", NormRate=False, NHighIQProband = 1870, NLowIQProband = 638, title=""):
+    Nmut_ALL, Nmut_HighIQ, Nmut_LowIQ = [],[],[]
+    CDS_ALL, CDS_HighIQ, CDS_LowIQ = [],[],[]
+    Rate_ALL, Rate_HighIQ, Rate_LowIQ = [],[],[]
+    #TotalALLRate, TotalHighIQRate, TotalLowIQRate = 0,0,0
+    #TotalMuts_ALL, TotalMuts_HighIQ, TotalMuts_LowIQ = 0,0,0
+    #TotalCDS_ALL,TotalCDS_HighIQ,TotalCDS_LowIQ = 0,0,0
+    for i in range(Nbins):
+        Nmut_ALL.append(sum([x.Nmut for x in parts[i]]))
+        Nmut_HighIQ.append(sum([x.Nmut for x in parts[i] if x.IQgt70]))
+        Nmut_LowIQ.append(sum([x.Nmut for x in parts[i] if x.IQlt70]))
+        CDS_ALL.append(sum([x.CDSLength for x in parts[i]]))
+        #CDS_HighIQ.append(sum([x.CDSLength for x in parts[i] if x.IQgt70]))
+        #CDS_LowIQ.append(sum([x.CDSLength for x in parts[i] if x.IQlt70]))
+        CDS_HighIQ.append(sum([x.CDSLength for x in parts[i]]))
+        CDS_LowIQ.append(sum([x.CDSLength for x in parts[i]]))
+        Rate_ALL.append(Nmut_ALL[i]/CDS_ALL[i])
+        Rate_HighIQ.append(Nmut_HighIQ[i]/CDS_HighIQ[i])
+        Rate_LowIQ.append(Nmut_LowIQ[i]/CDS_LowIQ[i])
+    TotalMutRate_ALL = sum(Nmut_ALL)/sum(CDS_ALL)
+    TotalMutRate_HighIQ = sum(Nmut_HighIQ)/sum(CDS_HighIQ)
+    TotalMutRate_LowIQ = sum(Nmut_LowIQ)/sum(CDS_LowIQ)
+    if Null == "All":
+        p1 = scipy.stats.binom_test(Nmut_ALL[0], sum(Nmut_ALL), p=CDS_ALL[0]/sum(CDS_ALL)) # All as null
+        p2 = scipy.stats.binom_test(Nmut_ALL[2], sum(Nmut_ALL), p=CDS_ALL[2]/sum(CDS_ALL)) # All as null
+    elif Null == "NS":
+        p1 = scipy.stats.binom_test(Nmut_ALL[0], Nmut_ALL[0]+Nmut_ALL[1], p=CDS_ALL[0]/(CDS_ALL[0]+CDS_ALL[1])) # NS as null
+        p2 = scipy.stats.binom_test(Nmut_ALL[2], Nmut_ALL[2]+Nmut_ALL[1], p=CDS_ALL[2]/(CDS_ALL[2]+CDS_ALL[1])) # NS as null
+    print("All proband binom P:", p1, p2)
+    normedRate0 = []
+    for Rate, group in zip(Rate_ALL, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        if NormRate:
+            xx = Rate/TotalMutRate_ALL
+        else:
+            xx = Rate/(NHighIQProband+NLowIQProband)
+        normedRate0.append(xx)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2), dpi=80)
+    fig.suptitle(title)
+    ax1.plot(normedRate0, color="black", label="all proband")
+    #ax1.axhline(y=1, color="black", linestyle=":")
+    ax1.legend()
+    normedRate1 = []
+    normedRate2 = []
+    if Null == "All":
+        p1 = scipy.stats.binom_test(Nmut_HighIQ[0], sum(Nmut_HighIQ), p=CDS_HighIQ[0]/sum(CDS_HighIQ))
+        p2 = scipy.stats.binom_test(Nmut_HighIQ[2], sum(Nmut_HighIQ), p=CDS_HighIQ[2]/sum(CDS_HighIQ))
+    elif Null == "NS":
+        p1 = scipy.stats.binom_test(Nmut_HighIQ[0], Nmut_HighIQ[0]+Nmut_HighIQ[1], p=CDS_HighIQ[0]/(CDS_HighIQ[0]+CDS_HighIQ[1]))
+        p2 = scipy.stats.binom_test(Nmut_HighIQ[2], Nmut_HighIQ[2]+Nmut_HighIQ[1], p=CDS_HighIQ[2]/(CDS_HighIQ[2]+CDS_HighIQ[1]))
+    print("NighIQ proband binom P:", p1, p2)
+    if Null == "All":
+        p1 = scipy.stats.binom_test(Nmut_LowIQ[0], sum(Nmut_LowIQ), p=CDS_LowIQ[0]/sum(CDS_LowIQ))
+        p2 = scipy.stats.binom_test(Nmut_LowIQ[2], sum(Nmut_LowIQ), p=CDS_LowIQ[2]/sum(CDS_LowIQ))
+    elif Null == "NS":
+        p1 = scipy.stats.binom_test(Nmut_LowIQ[0], Nmut_LowIQ[0]+Nmut_LowIQ[1], p=CDS_LowIQ[0]/(CDS_LowIQ[0]+CDS_LowIQ[1]))
+        p2 = scipy.stats.binom_test(Nmut_LowIQ[2], Nmut_LowIQ[2]+Nmut_LowIQ[1], p=CDS_LowIQ[2]/(CDS_LowIQ[2]+CDS_LowIQ[1]))
+    print("LowIQ proband binom P:", p1, p2)
+    for Rate, group in zip(Rate_HighIQ, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        if NormRate:
+            xx = Rate/TotalMutRate_HighIQ
+        else:
+            xx = Rate/NHighIQProband
+        normedRate1.append(xx)
+    for Rate, group in zip(Rate_LowIQ, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        if NormRate:
+            xx = Rate/TotalMutRate_LowIQ
+        else:
+            xx = Rate/NLowIQProband
+        normedRate2.append(xx)
+    ax2.plot(normedRate1, color="red", label="higher IQ")
+    ax2.plot(normedRate2, color="blue", label="lower IQ")
+    #ax2.axhline(y=1, color="black", linestyle=":")
+    ax2.legend()
+    plt.show()
+
+def GeneBinsBurden2(parts, Nbins=3, title="", NormRate=False, NHighIQProband = 1870, NLowIQProband = 538, Null="All"):
+    ALLRate, HighIQRate, LowIQRate = [],[],[]
+    TotalALLRate, TotalHighIQRate, TotalLowIQRate = 0,0,0
+    TotalMuts_ALL, TotalMuts_HighIQ, TotalMuts_LowIQ = 0,0,0
+    TotalCDS_ALL,TotalCDS_HighIQ,TotalCDS_LowIQ = 0,0,0
+    for i in range(Nbins):
+        withLGD_ALL = sum(x.Nmut for x in parts[i])
+        withLGD_HighIQ = sum(x.Nmut for x in parts[i] if x.IQgt70)
+        withLGD_LowIQ = sum(x.Nmut for x in parts[i] if x.IQlt70)
+        CDS_ALL = sum([x.CDSLength for x in parts[i]])
+        CDS_HighIQ = sum([x.CDSLength for x in parts[i] if x.IQgt70])
+        CDS_LowIQ = sum([x.CDSLength for x in parts[i] if x.IQlt70])
+        #CDS_HighIQ = sum([x.CDSLength for x in parts[i]])
+        #CDS_LowIQ = sum([x.CDSLength for x in parts[i]])
+        TotalMuts_ALL += withLGD_ALL; TotalMuts_HighIQ += withLGD_HighIQ; TotalMuts_LowIQ += withLGD_LowIQ 
+        ALLRate.append(withLGD_ALL/CDS_ALL)
+        HighIQRate.append(withLGD_HighIQ/CDS_HighIQ)
+        LowIQRate.append(withLGD_LowIQ/CDS_LowIQ)
+        #print(withLGD/sum([x.CDSLength for x in parts[i]]))
+        #print(len(parts[i]), withLGD0, sum([x.CDSLength for x in parts[i]]))
+        TotalCDS_ALL += CDS_ALL
+        TotalCDS_HighIQ += CDS_HighIQ
+        TotalCDS_LowIQ += CDS_LowIQ
+    TotalMutRate_ALL = TotalMuts_ALL/TotalCDS_ALL
+    TotalMutRate_HighIQ = TotalMuts_HighIQ/TotalCDS_HighIQ
+    TotalMutRate_LowIQ = TotalMuts_LowIQ/TotalCDS_LowIQ
+    Nmut_G1 = sum([x.Nmut for x in parts[0]])
+    Nmut_G2 = sum([x.Nmut for x in parts[1]])
+    Nmut_G3 = sum([x.Nmut for x in parts[2]])
+    CDS_G1 = sum([x.CDSLength for x in parts[0]])
+    CDS_G2 = sum([x.CDSLength for x in parts[1]])
+    CDS_G3 = sum([x.CDSLength for x in parts[2]])
+    #print(Nmut_G1, Nmut_G2, CDS_G1, CDS_G2, CDS_G1/(CDS_G1+CDS_G2))
+    Nmut_ALL = Nmut_G1+Nmut_G2+Nmut_G3
+    p1 = scipy.stats.binom_test(Nmut_G1, Nmut_ALL, p=CDS_G1/(CDS_G1+CDS_G2+CDS_G3))
+    p2 = scipy.stats.binom_test(Nmut_G3, Nmut_ALL, p=CDS_G3/(CDS_G1+CDS_G2+CDS_G3))
+    print("binom P:", p1, p2)
+    normedRate0 = []
+    for Rate, group in zip(ALLRate, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        xx = Rate/TotalMutRate_ALL
+        normedRate0.append(xx)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2), dpi=80)
+    fig.suptitle(title)
+    ax1.plot(normedRate0, color="black", label="all proband")
+    ax1.axhline(y=1, color="black", linestyle=":")
+    ax1.legend()
+    normedRate1 = []
+    normedRate2 = []
+    for Rate, group in zip(HighIQRate, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        xx = Rate/TotalMutRate_HighIQ
+        normedRate1.append(xx)
+    for Rate, group in zip(LowIQRate, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        xx = Rate/TotalMutRate_LowIQ
+        normedRate2.append(xx)
+    ax2.plot(normedRate1, color="red", label="higher IQ")
+    ax2.plot(normedRate2, color="blue", label="lower IQ")
+    ax2.axhline(y=1, color="black", linestyle=":")
+    ax2.legend()
+    plt.show()
+
+def ExonBinsBurden(parts, Nbins=3, Null="All", NormRate=False, NHighIQProband = 1870, NLowIQProband = 638, title=""):
+    Nmut_ALL, Nmut_HighIQ, Nmut_LowIQ = [],[],[]
+    CDS_ALL, CDS_HighIQ, CDS_LowIQ = [],[],[]
+    Rate_ALL, Rate_HighIQ, Rate_LowIQ = [],[],[]
+    #TotalALLRate, TotalHighIQRate, TotalLowIQRate = 0,0,0
+    #TotalMuts_ALL, TotalMuts_HighIQ, TotalMuts_LowIQ = 0,0,0
+    #TotalCDS_ALL,TotalCDS_HighIQ,TotalCDS_LowIQ = 0,0,0
+    for i in range(Nbins):
+        Nmut_ALL.append(sum([x.Nmut for x in parts[i]]))
+        Nmut_HighIQ.append(sum([x.Nmut for x in parts[i] if x.IQgt70]))
+        Nmut_LowIQ.append(sum([x.Nmut for x in parts[i] if x.IQlt70]))
+        CDS_ALL.append(sum([x.CDSLength for x in parts[i]]))
+        #CDS_HighIQ.append(sum([x.CDSLength for x in parts[i] if x.IQgt70]))
+        #CDS_LowIQ.append(sum([x.CDSLength for x in parts[i] if x.IQlt70]))
+        CDS_HighIQ.append(sum([x.CDSLength for x in parts[i]]))
+        CDS_LowIQ.append(sum([x.CDSLength for x in parts[i]]))
+        Rate_ALL.append(Nmut_ALL[i]/CDS_ALL[i])
+        Rate_HighIQ.append(Nmut_HighIQ[i]/CDS_HighIQ[i])
+        Rate_LowIQ.append(Nmut_LowIQ[i]/CDS_LowIQ[i])
+    TotalMutRate_ALL = sum(Nmut_ALL)/sum(CDS_ALL)
+    TotalMutRate_HighIQ = sum(Nmut_HighIQ)/sum(CDS_HighIQ)
+    TotalMutRate_LowIQ = sum(Nmut_LowIQ)/sum(CDS_LowIQ)
+    if Null == "All":
+        p1 = scipy.stats.binom_test(Nmut_ALL[0], sum(Nmut_ALL), p=CDS_ALL[0]/sum(CDS_ALL)) # All as null
+        p2 = scipy.stats.binom_test(Nmut_ALL[2], sum(Nmut_ALL), p=CDS_ALL[2]/sum(CDS_ALL)) # All as null
+    elif Null == "NS":
+        #p1 = scipy.stats.binom_test(Nmut_ALL[0], Nmut_ALL[0]+Nmut_ALL[1], p=CDS_ALL[0]/(CDS_ALL[0]+CDS_ALL[1])) # NS as null
+        #p2 = scipy.stats.binom_test(Nmut_ALL[2], Nmut_ALL[2]+Nmut_ALL[1], p=CDS_ALL[2]/(CDS_ALL[2]+CDS_ALL[1])) # NS as null
+        p1 = scipy.stats.binom_test(Nmut_ALL[0], CDS_ALL[0], p=Nmut_ALL[1]/CDS_ALL[1]) # NS as null
+        p2 = scipy.stats.binom_test(Nmut_ALL[2], CDS_ALL[2], p=Nmut_ALL[1]/CDS_ALL[1]) # NS as null
+    print("All proband binom P:", p1, p2)
+    normedRate0 = []
+    for Rate, group in zip(Rate_ALL, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        if NormRate:
+            xx = Rate/TotalMutRate_ALL
+        else:
+            xx = Rate/(NHighIQProband+NLowIQProband)
+        normedRate0.append(xx)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2), dpi=80)
+    fig.suptitle(title)
+    ax1.plot(normedRate0, color="black", label="all proband")
+    #ax1.axhline(y=1, color="black", linestyle=":")
+    ax1.legend()
+    normedRate1 = []
+    normedRate2 = []
+    if Null == "All":
+        p1 = scipy.stats.binom_test(Nmut_HighIQ[0], sum(Nmut_HighIQ), p=CDS_HighIQ[0]/sum(CDS_HighIQ))
+        p2 = scipy.stats.binom_test(Nmut_HighIQ[2], sum(Nmut_HighIQ), p=CDS_HighIQ[2]/sum(CDS_HighIQ))
+    elif Null == "NS":
+        p1 = scipy.stats.binom_test(Nmut_HighIQ[0], Nmut_HighIQ[0]+Nmut_HighIQ[1], p=CDS_HighIQ[0]/(CDS_HighIQ[0]+CDS_HighIQ[1]))
+        p2 = scipy.stats.binom_test(Nmut_HighIQ[2], Nmut_HighIQ[2]+Nmut_HighIQ[1], p=CDS_HighIQ[2]/(CDS_HighIQ[2]+CDS_HighIQ[1]))
+    print("NighIQ proband binom P:", p1, p2)
+    if Null == "All":
+        p1 = scipy.stats.binom_test(Nmut_LowIQ[0], sum(Nmut_LowIQ), p=CDS_LowIQ[0]/sum(CDS_LowIQ))
+        p2 = scipy.stats.binom_test(Nmut_LowIQ[2], sum(Nmut_LowIQ), p=CDS_LowIQ[2]/sum(CDS_LowIQ))
+    elif Null == "NS":
+        p1 = scipy.stats.binom_test(Nmut_LowIQ[0], Nmut_LowIQ[0]+Nmut_LowIQ[1], p=CDS_LowIQ[0]/(CDS_LowIQ[0]+CDS_LowIQ[1]))
+        p2 = scipy.stats.binom_test(Nmut_LowIQ[2], Nmut_LowIQ[2]+Nmut_LowIQ[1], p=CDS_LowIQ[2]/(CDS_LowIQ[2]+CDS_LowIQ[1]))
+    print("LowIQ proband binom P:", p1, p2)
+    for Rate, group in zip(Rate_HighIQ, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        if NormRate:
+            xx = Rate/TotalMutRate_HighIQ
+        else:
+            xx = Rate/NHighIQProband
+        normedRate1.append(xx)
+    for Rate, group in zip(Rate_LowIQ, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
+        if NormRate:
+            xx = Rate/TotalMutRate_LowIQ
+        else:
+            xx = Rate/NLowIQProband
+        normedRate2.append(xx)
+    ax2.plot(normedRate1, color="red", label="higher IQ")
+    ax2.plot(normedRate2, color="blue", label="lower IQ")
+    #ax2.axhline(y=1, color="black", linestyle=":")
+    ax2.legend()
+    plt.show()
+
+def ExonBinsBurden2(parts, Nbins=3, title=""):
     Rates0 = []
     Rates1 = []
     Rates2 = []
     OveralRate0,OveralRate1,OveralRate2 = 0,0,0
     TotalMuts0, TotalMuts1, TotalMuts2 = 0,0,0
     TotalCDS = 0
-    for i in range(4):
+    for i in range(Nbins):
         withLGD0 = sum([x.Nmut for x in parts[i]])
         withLGD1 = sum([x.Nmut for x in parts[i] if x.IQgt70])
         withLGD2 = sum([x.Nmut for x in parts[i] if x.IQlt70])
@@ -3498,31 +4058,45 @@ def ExonBinsBurden(parts):
         Rates0.append(withLGD0/sum([x.CDSLength for x in parts[i]]))
         Rates1.append(withLGD1/sum([x.CDSLength for x in parts[i]]))
         Rates2.append(withLGD2/sum([x.CDSLength for x in parts[i]]))
-        
 
         TotalCDS += sum([x.CDSLength for x in parts[i]])
         #print(withLGD/sum([x.CDSLength for x in parts[i]]))
-        print(withLGD0, sum([x.CDSLength for x in parts[i]]))
+        print(len(parts[i]), withLGD0, sum([x.CDSLength for x in parts[i]]))
     OveralRate0 = TotalMuts0/TotalCDS
     OveralRate1 = TotalMuts1/TotalCDS
     OveralRate2 = TotalMuts2/TotalCDS
+    Nmut_G1 = sum([x.Nmut for x in parts[0]])
+    Nmut_G2 = sum([x.Nmut for x in parts[1]])
+    Nmut_G3 = sum([x.Nmut for x in parts[2]])
+    CDS_G1 = sum([x.CDSLength for x in parts[0]])
+    CDS_G2 = sum([x.CDSLength for x in parts[1]])
+    CDS_G3 = sum([x.CDSLength for x in parts[2]])
+    print(Nmut_G1, Nmut_G2, CDS_G1, CDS_G2, CDS_G1/(CDS_G1+CDS_G2))
+    p1 = scipy.stats.binom_test(Nmut_G1, Nmut_G1 + Nmut_G2, p=CDS_G1/(CDS_G1+CDS_G2))
+    p2 = scipy.stats.binom_test(Nmut_G3, Nmut_G3 + Nmut_G2, p=CDS_G3/(CDS_G3+CDS_G2))
+    print("binom P:", p1, p2)
     normedRate0 = []
-    for Rate, group in zip(Rates0, ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]):
+    for Rate, group in zip(Rates0, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
         xx = Rate/OveralRate0
         normedRate0.append(xx)
-    plt.plot(normedRate0)
-    plt.show()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,2), dpi=80)
+    fig.suptitle(title)
+    ax1.plot(normedRate0, color="black", label="all probands")
+    ax1.axhline(y=1, color="black", linestyle=":")
+    ax1.legend()
     normedRate1 = []
     normedRate2 = []
-    for Rate, group in zip(Rates1, ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]):
+    for Rate, group in zip(Rates1, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
         xx = Rate/OveralRate1
         normedRate1.append(xx)
-    for Rate, group in zip(Rates2, ["Strong prenatal bias","Prenatal bias","Weak bias","postnatal bias"]):
+    for Rate, group in zip(Rates2, ["Prenatal bias","Unsignificant bias","Postnatal bias"]):
         xx = Rate/OveralRate2
         normedRate2.append(xx)
-    plt.plot(normedRate1, color="red", label="higher IQ")
-    plt.plot(normedRate2, color="blue", label="lower IQ")
-    plt.legend()
+    ax2.plot(normedRate1, color="red", label="higher IQ")
+    ax2.plot(normedRate2, color="blue", label="lower IQ")
+    ax2.axhline(y=1, color="black", linestyle=":")
+    ax2.legend()
+    ax2.legend()
     plt.show()
 
 ##############################################################################
@@ -3722,9 +4296,9 @@ def RatioPermutationTestNVIQvsVIQ(Pairs, Phenotype1="NVIQ", Phenotype2="VABS", N
 ##############################################################################
 # Frac. Isoform - normalized pheno
 ##############################################################################
-def LoadGTF4FracIso():
+def LoadGTF4FracIso(GTFFile):
     Genes = {}
-    hand = open("unifiedmodel/RecLGDgenes.gencode.v19.gtf", 'rt')
+    hand = open(GTFFile, 'rt')
     for l in hand:
         if l.startswith("#"):
             continue
@@ -3736,26 +4310,32 @@ def LoadGTF4FracIso():
         end = int(llist[4])
         if llist[2] == "gene":
             gene_name = info["gene_name"]
-            gene_id = info["gene_id"]
-            Genes[gene_name] = GTFGene(gene_name, gene_id, strand)
+            gene_id = info["gene_id"].split(".")[0]
+            if gene_name not in Genes:
+                Genes[gene_name] = GTFGene(gene_name, gene_id, strand)
         elif llist[2] == "transcript":
+            #print(info["transcript_id"], info["transcript_type"])
             gene_name = info["gene_name"]
             gene_id = info["gene_id"]
             transcript_name = info["transcript_id"]
-            transcript_id = info["transcript_id"]
+            transcript_id = info["transcript_id"].split(".")[0]
             transcript_type = info["transcript_type"]
             if transcript_id not in Genes[gene_name].Transcripts and transcript_type=="protein_coding":
+                #print("XX", info["transcript_id"], info["transcript_type"])
+                #print(gene_name, Genes[gene_name].Transcripts.keys())
                 Genes[gene_name].Transcripts[transcript_id] = GTFTranscript(gene_name, transcript_name, transcript_id, strand)
+                #print(gene_name, Genes[gene_name].Transcripts.keys())
         elif llist[2] == "exon":
             gene_name = info["gene_name"]
             gene_id = info["gene_id"]
             exon_id = info["exon_id"]
             transcript_name = info["transcript_id"]
-            transcript_id = info["transcript_id"]
+            transcript_id = info["transcript_id"].split(".")[0]
             transcript_type = info["transcript_type"]
             if transcript_type=="protein_coding":
                 exon= GTFExon(exon_id, start, end, transcript_id, strand)
-                Genes[gene_name].Transcripts[transcript_id].Exons.append(exon)
+                #Genes[gene_name].Transcripts[transcript_id].Exons.append(exon)
+                Genes[gene_name].Transcripts[transcript_id].Exons[exon_id] = exon
     return Genes
 
 def searchExon4FracIso(Gene, Pos, Ref, Alt, Genes):
@@ -3763,7 +4343,7 @@ def searchExon4FracIso(Gene, Pos, Ref, Alt, Genes):
     gene_obj = Genes[Gene]
     _Exons, Transcripts = [],[]
     for transid, transobj in gene_obj.Transcripts.items():
-        for exon in transobj.Exons:
+        for exon in transobj.Exons.values():
             if Pos > exon.start -3 and Pos < exon.end +3:
                 _Exons.append(exon.ExonID)
                 Transcripts.append(transid)
@@ -3775,15 +4355,240 @@ def searchExon4FracIso(Gene, Pos, Ref, Alt, Genes):
                     break
     return list(set(_Exons)), list(set(Transcripts))
 
-def LoadVar4FracIso(Genes):
-    Jiayao_features = pd.read_csv("unifiedmodel/features.jiayao.csv")
-    Jiayao_features.loc[Jiayao_features["effectGene"]=="MLL5", "effectGene"] = "KMT2E"
+def LoadVar4FracIso(DF, Genes):
+    Jiayao_features = DF
+    #Jiayao_features = pd.read_csv("/Users/jiayao/Work/BrainDisorders/src/data/SVIP.V4.RecGenes.LGD.txt", delimiter="\t")
+    #Jiayao_features.loc[Jiayao_features["effectGene"]=="MLL5", "effectGene"] = "KMT2E"
     Jiayao_features["Exons"] = ""
     Jiayao_features["Transcripts"] = ""
     for i, row in Jiayao_features.iterrows():
+        #famid, gene, (Chr, Pos, Ref, Alt) = row["familyId"], row["effectGene"], row["vcfVariant"].split(":")
         famid, gene, (Chr, Pos, Ref, Alt) = row["familyId"], row["effectGene"], row["vcfVariant"].split(":")
         ExonIDs, TranscriptIDs = searchExon4FracIso(gene, Pos, Ref, Alt, Genes)
         Jiayao_features.at[i, "Exons"] = ExonIDs
         Jiayao_features.at[i, "Transcripts"] = TranscriptIDs
     return Jiayao_features
+
+def LoadVar4FracIso2(DF, Genes):
+    Jiayao_features = DF #pd.read_csv("/Users/jiayao/Work/BrainDisorders/src/data/SVIP.V4.RecGenes.LGD.txt", delimiter="\t")
+    Jiayao_features.loc[Jiayao_features["genetic_status"]=="MLL5", "genetic_status"] = "KMT2E"
+    Jiayao_features["Exons"] = ""
+    Jiayao_features["Transcripts"] = ""
+    for i, row in Jiayao_features.iterrows():
+        #famid, gene, (Chr, Pos, Ref, Alt) = row["familyId"], row["effectGene"], row["vcfVariant"].split(":")
+        Jiayao_features.loc[i, "effectGene"] = row["genetic_status"]
+        gene = row["genetic_status"]
+        Chr, Pos = row["location"].split(":")
+        Pos, Pos2 = Pos.split("-")
+        Ref = "A"
+        Alt = "A" * (len(Pos2) - len(Pos) + 1)
+        ExonIDs, TranscriptIDs = searchExon4FracIso(gene, Pos, Ref, Alt, Genes)
+        Jiayao_features.at[i, "Exons"] = ";".join(ExonIDs)
+        Jiayao_features.at[i, "Transcripts"] = ";".join(TranscriptIDs)
+    return Jiayao_features
+
+def SelectTissue(GTEX_EXP_MATRIX):
+    pass 
+
+def SummarizeTMPCrossSample(GTEX_EXP_MATRIX, transform="linear", method="mean"):
+    Res = {}
+    for i, row in GTEX_EXP_MATRIX.iterrows():
+        EXPs = list(row[2:])
+        #EnsGene, EnsTrans = list(row[0:2])
+        EnsTrans, EnsGene = list(row[0:2])
+        EnsGene = EnsGene.split(".")[0]
+        EnsTrans = EnsTrans.split(".")[0]
+        if EnsGene not in Res:
+            Res[EnsGene] = {}
+        if transform == 'log2':
+            EXPs = [math.log2(exp+1) for exp in EXPs]
+        if method == "mean":
+            Value = np.mean(EXPs)
+        elif method == "median":
+            Value = np.median(EXPs)
+        Res[EnsGene][EnsTrans] = Value
+    return Res
+
+def SharedFracIsoNormPheno(DF, GeneSYM2ID, GeneTransTPM, pheno="NVIQ", Norm=False, SameExon=False):
+    pheno_diffs = []
+    FracIsoComs = []
+    for gene in list(set(DF["effectGene"].values)):
+        df = DF[(DF["effectGene"]==gene)]
+        EnsGeneID = GeneSYM2ID[gene]
+        pheno_diff_gene = []
+        for row1, row2 in itertools.combinations(df.iterrows(), r=2):
+            row1 = row1[1]
+            row2 = row2[1]
+            if not SameExon:
+                if row1["Exons"] == row2["Exons"]:
+                    continue
+            #if pheno == "composite_standard_score":
+            #    Y1 = row1[pheno]
+            Y1 = max(0, 100-row1[pheno])
+            Y2 = max(0, 100-row2[pheno])
+            Iso1 = row1["Transcripts"].split(";")
+            Iso2 = row2["Transcripts"].split(";")
+            Frac1 = len(set(Iso1))/len( GeneTransTPM[EnsGeneID].keys() )
+            Frac2 = len(set(Iso2))/len( GeneTransTPM[EnsGeneID].keys() )
+            if Norm:
+                try:
+                    Yn1, Yn2 = Y1/Frac1, Y2/Frac2
+                except ZeroDivisionError:
+                    #print(Frac1, Frac2, row1, row2)
+                    continue
+            else:
+                Yn1, Yn2 = Y1, Y2
+            pheno_diff = abs(Yn1-Yn2)
+            FracIsoCom = len(set(Iso1).intersection(set(Iso2))) / len( GeneTransTPM[EnsGeneID].keys() )
+            FracIsoComs.append(FracIsoCom)
+            pheno_diff_gene.append(pheno_diff)
+        pheno_diffs.extend(pheno_diff_gene)
+    return FracIsoComs, pheno_diffs
+
+
+def Permute(DF, GeneSYM2ID, GeneTransTPM, N=1000, pheno="NVIQ"):
+    pearson_rhos = []
+    spearman_rhos = []
+    tmp_df = DF.copy(deep=True)
+    for i in range(N):
+        tmp_df[pheno] = np.random.permutation(tmp_df[pheno].values)
+        #display(tmp_df.head(2))
+        FracIsoComs, pheno_diffs = SharedFracIsoNormPheno(tmp_df, GeneSYM2ID, GeneTransTPM, pheno=pheno)
+        r1, p1 = pearsonr(FracIsoComs, pheno_diffs)
+        r2, p2 = spearmanr(FracIsoComs, pheno_diffs)
+        pearson_rhos.append(r1)
+        spearman_rhos.append(r2)
+    return pearson_rhos, spearman_rhos
+
+def PlotSharedIso(FracIsoComs, pheno_diffs):
+    plt.scatter(FracIsoComs, pheno_diffs)
+    plt.xlabel("Frac.Trans.Affected")
+    plt.ylabel("Normed.NVIQ.Diff")
+
+    (r1, p1) = (pearsonr(FracIsoComs, pheno_diffs))
+    (r2, p2) = (spearmanr(FracIsoComs, pheno_diffs))
+    plt.text(x=max(FracIsoComs)*0.5, y=max(pheno_diffs)*0.9, s="pearsonr=%.2f p=%.2e\nspearmanr=%.2f p=%.2e"%(r1,p1,r2,p2))
+    plt.show()
+
+def GroupTest(FracIsoComs, IQ_diffs, cutoff=0.5):
+    Group1, Group2 = [],[]
+    for frac, diff in zip(FracIsoComs, IQ_diffs):
+        if frac > cutoff:
+            Group2.append(diff)
+        else:
+            Group1.append(diff)
+    print(len(Group1), len(Group2))
+    print(np.mean(Group1), np.mean(Group2))
+    print(scipy.stats.mannwhitneyu(Group1, Group2))
+
+def LoadGenesForSVIPSSC():
+    Genes = {}
+    hand = open("unifiedmodel/RecLGDgenes.gencode.v19.gtf", 'rt')
+    GeneIDs = []
+    for l in hand:
+        if l.startswith("#"):
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        CHR = llist[0].lstrip("chr")
+        strand = llist[6]
+        start = int(llist[3])
+        end = int(llist[4])
+        if llist[2] == "gene":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"].split(".")[0]
+            Genes[gene_name] = GTFGene(gene_name, gene_id, strand)
+            GeneIDs.append(gene_id)
+
+    hand = open("unifiedmodel/VIPgenes.gencode.v19.gtf", 'rt')
+    for l in hand:
+        if l.startswith("#"):
+            continue
+        llist = l.strip().split("\t")
+        info = gtf_info_parser(llist[8])
+        CHR = llist[0].lstrip("chr")
+        strand = llist[6]
+        start = int(llist[3])
+        end = int(llist[4])
+        if llist[2] == "gene":
+            gene_name = info["gene_name"]
+            gene_id = info["gene_id"].split(".")[0]
+            Genes[gene_name] = GTFGene(gene_name, gene_id, strand)
+            GeneIDs.append(gene_id)
+
+    GeneIDs = set(GeneIDs)
+    return GeneIDs, Genes
+
+##############################################################################
+# NMD Efficiency modeling using GTEX data 
+##############################################################################
+def CollectASECount(_file):
+    ASE_count_dir = "/Users/jiayao/Work/BrainDisorders/data/GTEx/Andy/INDV/"
+    writer = csv.writer(open("data/GTEX_ASE_SNP.tsv", 'wt'), delimiter="\t")
+    for filename in os.listdir(ASE_count_dir):
+        if filename.endswith(".pp"):
+            reader = csv.reader(open(ASE_count_dir+filename, 'rt'), delimiter="\t")
+            header = next(reader)
+            for row in reader:
+                SAMPLE = row[1]
+                ID = row[2]
+                INFO = row[7]
+                NREF = int(row[11])
+                NALT = int(row[12])
+                if NREF + NALT >= 8:
+                    writer.writerow([SAMPLE, ID, INFO, NREF, NALT])
+
+def SamplingAlphaBeta(mean_step = 1e-3, pseudo_var_step = 1e-2):
+    Means = np.arange(0,1,1e-3)
+    Vars = np.arange(0,10,1e-2)
+    Qs = [scipy.stats.halfcauchy(x) for x in STDs]
+    #return Means, STDs, QSTDs
+    for mu, var in zip(Means, Vars):
+        print(mu, var)
+
+def reparameter(u, v):
+    a = u / (v**2)
+    b = (1 - u)/(v**2)
+    return a,b
+
+def beta_binom_ASE(f, a, b, k, n):
+    res1 = beta.pdf(f, a,b)
+    res2 = binom.pmf(k, n, f)
+    return res1 * res2
+
+def GridSearchASE(Alphas, Betas, Indvs, dx=0.001):
+    max_posteriori, _alpha, _beta = 0,0,0
+    for i, alpha in enumerate(Alphas):
+        for j, beta in enumerate(Betas):
+            posteriori = 0
+            for k, indv in enumerate(Indvs):
+                for v, var in enumerate(indv):
+                    Kvi, Nvi = var
+                    #pty = scipy.stats.beta.pdf(ptx, alpha, beta)
+                    res, err = quad(beta_binom_ASE, 0, 1, args=(alpha, beta, Kvi, Nvi))
+                    posteriori += res * scipy.stats.halfcauchy.pdf(1/math.sqrt(alpha+beta))
+            if posteriori > max_posteriori:
+                max_posteriori = posteriori; _alpha = alpha; _beta = beta
+    return max_posteriori, _alpha, _beta
+
+def P_F_E(f,e):
+    return f*(1-e) / (1-f*e)
+
+def beta_binom_NMD(e, f, a, b, k, n):
+    res1 = beta.pdf(e, a,b)
+    res2 = binom.pmf(k, n, P_F_E(f,e))
+    return res1 * res2
+
+def GridSearchNMD(Alphas, Betas, LGDs, dx=0.001):
+    max_posteriori, _alpha, _beta = 0,0,0
+    for i, alpha in enumerate(Alphas):
+        for j, beta in enumerate(Betas):
+            posteriori = 0
+            for k, LGD in enumerate(LGD):
+                Kvi, Nvi, alpha_ASE, beta_ASE = LGD
+                res, err = dblquad(beta_binom_NMD, 0, 1, lambda f:0, lambda f:1, args=(alpha, beta, Kvi, Nvi))
+                posteriori += res * scipy.stats.halfcauchy.pdf(1/math.sqrt(alpha+beta))
+        if posteriori > max_posteriori:
+            max_posteriori = posteriori; _alpha = alpha; _beta = beta
+    return max_posteriori, _alpha, _beta
 
