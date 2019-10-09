@@ -4538,13 +4538,46 @@ def CollectASECount(_file):
                 if NREF + NALT >= 8:
                     writer.writerow([SAMPLE, ID, INFO, NREF, NALT])
 
-def SamplingAlphaBeta(mean_step = 1e-3, pseudo_var_step = 1e-2):
-    Means = np.arange(0,1,1e-3)
-    Vars = np.arange(0,10,1e-2)
-    Qs = [scipy.stats.halfcauchy(x) for x in STDs]
+class ASEVar:
+    def __init__(self, SAMPLE, INFO, NREF, NALT, GENE):
+        self.sample = SAMPLE
+        self.id = INFO
+        self.nref = NREF
+        self.nalt = NALT
+        self.gene = GENE
+
+class ASEGene:
+    def __init__(self, gene):
+        self.ID = gene
+        self.ASEVars = []
+        self.Nobs = 0
+        self.Nvar = 0
+
+def TissueGeneMut(Mutable, GTExMeta, Tissue):
+    SAMPID = set(GTExMeta[GTExMeta["SMTS"]==Tissue]["SAMPID"].values)
+    mutable = Mutable[Mutable["SAMPLE"].isin(SAMPID)]
+    Genes = set(mutable["SEVERE_GENE"].values)
+    res = {}
+    for i, row in mutable.iterrows():
+        SAMPLE, INFO, NREF, NALT, GENE = row["SAMPLE"], row["INFO"], row["NREF"], row["NALT"], row["SEVERE_GENE"]
+        var = ASEVar(SAMPLE, INFO, NREF, NALT, GENE)
+        if GENE not in res:
+            res[GENE] = []
+        res[GENE].append(var)
+    return res
+
+def SamplingAlphaBeta(mean_step = 1e-3, pseudo_var_step = 1e-2, max_pseudo_var = 10):
+    Means = np.arange(mean_step,1,mean_step)
+    Vars = np.arange(pseudo_var_step, max_pseudo_var,pseudo_var_step)
+    #Qs = [scipy.stats.halfcauchy(x) for x in STDs]
     #return Means, STDs, QSTDs
-    for mu, var in zip(Means, Vars):
-        print(mu, var)
+    a_b_q = []
+    for mu in Means:
+        for var in Vars:
+            a,b = reparameter(mu, var)
+            q = math.log(scipy.stats.halfcauchy.pdf(1/math.sqrt(a+b)))
+            a_b_q.append([a,b,q])
+    return a_b_q
 
 def reparameter(u, v):
     a = u / (v**2)
@@ -4556,19 +4589,24 @@ def beta_binom_ASE(f, a, b, k, n):
     res2 = binom.pmf(k, n, f)
     return res1 * res2
 
-def GridSearchASE(Alphas, Betas, Indvs, dx=0.001):
-    max_posteriori, _alpha, _beta = 0,0,0
-    for i, alpha in enumerate(Alphas):
-        for j, beta in enumerate(Betas):
-            posteriori = 0
-            for k, indv in enumerate(Indvs):
-                for v, var in enumerate(indv):
-                    Kvi, Nvi = var
-                    #pty = scipy.stats.beta.pdf(ptx, alpha, beta)
-                    res, err = quad(beta_binom_ASE, 0, 1, args=(alpha, beta, Kvi, Nvi))
-                    posteriori += res * scipy.stats.halfcauchy.pdf(1/math.sqrt(alpha+beta))
-            if posteriori > max_posteriori:
-                max_posteriori = posteriori; _alpha = alpha; _beta = beta
+def ComputeLikelihood(genedat, alpha, beta, Q):
+    posteriori = 0
+    for k, var in enumerate(genedat):
+        Kvi, Nvi = var.nalt, var.nref+var.nalt
+        res, err = quad(beta_binom_ASE, 0, 1, args=(alpha, beta, Kvi, Nvi))
+        posteriori += math.log(res)
+    posteriori += Q
+    return posteriori
+
+
+def GridSearchASE(a_b_q, genedat, dx=0.001):
+    max_posteriori, _alpha, _beta = -np.inf,0,0
+    for i, (alpha, beta, QAB) in enumerate(a_b_q):
+        posteriori = ComputeLikelihood(genedat, alpha, beta, QAB)
+        if posteriori > max_posteriori:
+            max_posteriori = posteriori; _alpha = alpha; _beta = beta
+        if i % 10 == 0:
+            sys.stdout.write("\r %d computed"%i)
     return max_posteriori, _alpha, _beta
 
 def P_F_E(f,e):
