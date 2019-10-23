@@ -4524,7 +4524,7 @@ def LoadGenesForSVIPSSC():
 ##############################################################################
 def CollectASECount(_file):
     ASE_count_dir = "/Users/jiayao/Work/BrainDisorders/data/GTEx/Andy/INDV/"
-    writer = csv.writer(open("data/GTEX_ASE_SNP.tsv", 'wt'), delimiter="\t")
+    writer = csv.writer(open("data/GTEX_ASE_SNP.2.tsv", 'wt'), delimiter="\t")
     for filename in os.listdir(ASE_count_dir):
         if filename.endswith(".pp"):
             reader = csv.reader(open(ASE_count_dir+filename, 'rt'), delimiter="\t")
@@ -4533,15 +4533,18 @@ def CollectASECount(_file):
                 SAMPLE = row[1]
                 ID = row[2]
                 INFO = row[7]
+                DEPTH = int(row[8])
                 NREF = int(row[11])
                 NALT = int(row[12])
-                if NREF + NALT >= 8:
+                #if NREF + NALT >= 8:
+                if DEPTH >= 8:
                     writer.writerow([SAMPLE, ID, INFO, NREF, NALT])
 
 class ASEVar:
-    def __init__(self, SAMPLE, INFO, NREF, NALT, GENE):
+    def __init__(self, SAMPLE, ID, INFO, NREF, NALT, GENE):
         self.sample = SAMPLE
-        self.id = INFO
+        self.id = ID
+        self.vcfid = INFO
         self.nref = NREF
         self.nalt = NALT
         self.gene = GENE
@@ -4559,74 +4562,246 @@ def TissueGeneMut(Mutable, GTExMeta, Tissue):
     Genes = set(mutable["SEVERE_GENE"].values)
     res = {}
     for i, row in mutable.iterrows():
-        SAMPLE, INFO, NREF, NALT, GENE = row["SAMPLE"], row["INFO"], row["NREF"], row["NALT"], row["SEVERE_GENE"]
-        var = ASEVar(SAMPLE, INFO, NREF, NALT, GENE)
+        SAMPLE, ID, INFO, NREF, NALT, GENE = row["SAMPLE"], row["ID"], row["INFO"], row["NREF"], row["NALT"], row["SEVERE_GENE"]
+        var = ASEVar(SAMPLE, ID, INFO, NREF, NALT, GENE)
         if GENE not in res:
             res[GENE] = []
         res[GENE].append(var)
     return res
 
-def SamplingAlphaBeta(mean_step = 1e-3, pseudo_var_step = 1e-2, max_pseudo_var = 10):
-    Means = np.arange(mean_step,1,mean_step)
-    Vars = np.arange(pseudo_var_step, max_pseudo_var,pseudo_var_step)
+def TissueLGD(Mutable, GTExMeta, Tissue):
+    SAMPID = set(GTExMeta[GTExMeta["SMTS"]==Tissue]["SAMPID"].values)
+    mutable = Mutable[Mutable["SAMPLE"].isin(SAMPID)]
+    res = {}
+    for i, row in mutable.iterrows():
+        SAMPLE, ID, INFO, NREF, NALT, GENE = row["SAMPLE"], row["ID"], row["INFO"], row["NREF"], row["NALT"], row["SEVERE_GENE"]
+        var = ASEVar(SAMPLE, ID, INFO, NREF, NALT, GENE)
+        res[ID] = var
+    return res
+
+def Jacobian1(a, b):
+    return math.pow((a+b), -5/2)
+
+def AB2Search(a, b):
+    return math.log(a/b), math.log(a+b)
+
+
+def Jacobian2(a, b):
+    #return (math.exp(2*v+u)) / math.pow((math.exp(u)+1), 2)
+    return a*b #*math.pow((a+b), -5/2) #math.log(a/b), math.log(a+b)
+
+def SamplingAlphaBeta(step = 1):
+    logMeans = np.arange(-10, 10+step, step)
+    logVars = np.arange(-10, 10+step, step)
     #Qs = [scipy.stats.halfcauchy(x) for x in STDs]
     #return Means, STDs, QSTDs
     a_b_q = []
-    for mu in Means:
-        for var in Vars:
-            a,b = reparameter(mu, var)
+    for logmu in logMeans:
+        for logvar in logVars:
+            a,b = reparameter(logmu, logvar)
             q = math.log(scipy.stats.halfcauchy.pdf(1/math.sqrt(a+b)))
             a_b_q.append([a,b,q])
     return a_b_q
 
-def reparameter(u, v):
-    a = u / (v**2)
-    b = (1 - u)/(v**2)
-    return a,b
+def reparameter(u_, v_):
+    expu, expv = math.exp(u_), math.exp(v_)
+    a = (expu * expv) / (1 + expu)
+    b = expv - a
+    return a, b
 
 def beta_binom_ASE(f, a, b, k, n):
-    res1 = beta.pdf(f, a,b)
-    res2 = binom.pmf(k, n, f)
-    return res1 * res2
+    res1 = beta.logpdf(f, a,b)
+    res2 = binom.logpmf(k, n, f)
+    return math.exp(res1 + res2)
+
+def beta_binom_ASE2(f, a, b, k, n):
+    res1 = beta.logpdf(f, a,b)
+    res2 = binom.logpmf(k, n, f)
+    return res1, res2 #math.exp(res1 + res2)
 
 def ComputeLikelihood(genedat, alpha, beta, Q):
     posteriori = 0
     for k, var in enumerate(genedat):
         Kvi, Nvi = var.nalt, var.nref+var.nalt
-        res, err = quad(beta_binom_ASE, 0, 1, args=(alpha, beta, Kvi, Nvi))
-        posteriori += math.log(res)
-    posteriori += Q
+        res, err = quad(beta_binom_ASE, 0, 1, args=(alpha, beta, Kvi, Nvi), )
+        #res = SimpsonQuad(beta_binom_ASE, 0, 1, args=(alpha, beta, Kvi, Nvi), steps=2500)
+        res = math.log(res)
+        posteriori += res 
+        #print(Kvi, Nvi, posteriori)
+    posteriori += scipy.stats.halfcauchy.logpdf(1/math.sqrt(alpha+beta))
+    posteriori += math.log(Jacobian1(alpha, beta))
+    posteriori += math.log(Jacobian2(alpha, beta))
     return posteriori
-
 
 def GridSearchASE(a_b_q, genedat, dx=0.001):
     max_posteriori, _alpha, _beta = -np.inf,0,0
+    res = []
     for i, (alpha, beta, QAB) in enumerate(a_b_q):
+        #print(alpha, beta)
         posteriori = ComputeLikelihood(genedat, alpha, beta, QAB)
+        if posteriori > max_posteriori:
+            max_posteriori = posteriori; _alpha = alpha; _beta = beta
+        if i % 10 == 0:
+            sys.stdout.write("\r %d computed"%i)
+        res.append([(alpha, beta), posteriori])
+        #print(math.log(Jacobian1(alpha, beta)), math.log(Jacobian2(alpha, beta)), QAB)
+    return res#max_posteriori, _alpha, _beta
+
+def P_F_E(f,e):
+    return f*(1-e) / (1-f*e)
+
+def beta_binom_NMD(e, f, ae, be, af, bf, k, n):
+    res1 = beta.logpdf(e, ae, be)
+    res2 = binom.logpmf(k, n, P_F_E(f,e))
+    res3 = beta.logpdf(f, af, bf)
+    return math.exp(res1 + res2 + res3)
+
+def _halfcauchy(x):
+    return -1 * math.log(1+x**2)
+
+def ComputeLikelihoodNMDPara(LGDVarDat, alpha, beta, QAB):
+    posteriori = 0
+    #af, bf = LGDVarDat.af, LGDVarDat.bf
+    for i, (k, N, af, bf) in enumerate(LGDVarDat):
+        Kvi, Nvi = k, N
+        #res, err = dblquad(beta_binom_NMD, 0, 1, lambda f:0, lambda f:1, args=(alpha, beta, af, bf, Kvi, Nvi), epsabs=1e-4, epsrel=1e-4)
+        #res, err = dblquad(beta_binom_NMD, 0, 1, lambda f:0, lambda f:1, args=(alpha, beta, af, bf, Kvi, Nvi))
+        res, err = dblquad(beta_binom_NMD, 0, 1, lambda f:0, lambda f:1, args=(alpha, beta, af, bf, Kvi, Nvi))
+        #res = res * Jacobian1(alpha, beta)
+        #u_, v_ = AB2Search(alpha, beta)
+        #res = res * Jacobian2(u_, v_)
+        posteriori += math.log(res)
+        #sys.stderr.write("\r%d"%i)
+        print(Kvi, Nvi, math.log(res))
+    posteriori += _halfcauchy(1 / math.sqrt(alpha+beta)) 
+    posteriori += math.log(Jacobian1(alpha, beta))
+    posteriori += math.log(Jacobian2(alpha, beta))
+    print(math.log(Jacobian1(alpha, beta)),  math.log(Jacobian2(alpha, beta)), _halfcauchy(1 / math.sqrt(alpha+beta)))
+    return posteriori
+
+def GridSearchNMD(a_b_q, LGDVarDat, dx=0.001):
+    max_posteriori, _alpha, _beta = -np.inf,0,0
+    for i, (alpha, beta, QAB) in enumerate(a_b_q):
+        print(alpha, beta)
+        posteriori = ComputeLikelihoodNMDPara(LGDVarDat, alpha, beta, QAB)
+        print(math.log(Jacobian1(alpha, beta)),  math.log(Jacobian1(alpha, beta)), _halfcauchy(1 / math.sqrt(alpha+beta)))
         if posteriori > max_posteriori:
             max_posteriori = posteriori; _alpha = alpha; _beta = beta
         if i % 10 == 0:
             sys.stdout.write("\r %d computed"%i)
     return max_posteriori, _alpha, _beta
 
-def P_F_E(f,e):
-    return f*(1-e) / (1-f*e)
+def LoadLGDDat(fname):
+    hand = open(fname, 'rt')
+    l = next(hand)
+    res = []
+    for l in hand:
+        llist = l.strip().split(",")
+        res.append([int(x) for x in llist] )
+    return res
 
-def beta_binom_NMD(e, f, a, b, k, n):
-    res1 = beta.pdf(e, a,b)
+
+def beta_binom_Ehat(f, e, af, bf, k, n):
     res2 = binom.pmf(k, n, P_F_E(f,e))
-    return res1 * res2
+    res3 = beta.pdf(f, af, bf)
+    return res2 * res3
 
-def GridSearchNMD(Alphas, Betas, LGDs, dx=0.001):
-    max_posteriori, _alpha, _beta = 0,0,0
-    for i, alpha in enumerate(Alphas):
-        for j, beta in enumerate(Betas):
-            posteriori = 0
-            for k, LGD in enumerate(LGD):
-                Kvi, Nvi, alpha_ASE, beta_ASE = LGD
-                res, err = dblquad(beta_binom_NMD, 0, 1, lambda f:0, lambda f:1, args=(alpha, beta, Kvi, Nvi))
-                posteriori += res * scipy.stats.halfcauchy.pdf(1/math.sqrt(alpha+beta))
+def ComputeLikelihoodEhat(var, e, af, bf, ae, be):
+    posteriori = 0
+    #f, af, bf, ae, be = LGDVarDat.f, LGDVarDat.af, LGDVarDat.bf, LGDVarDat.ae, LGDVarDat.be 
+    Kvi, Nvi = var.nalt, var.nref+var.nalt
+    res, err = quad(beta_binom_Ehat, 0, 1, args=(e, af, bf, Kvi, Nvi))
+    #res = SimpsonQuad(beta_binom_Ehat, 0, 1, args=(e, af, bf, Kvi, Nvi))
+    #print(math.log(res))
+    posteriori += math.log(res)
+    #print(e, ae, be, beta.pdf(e, ae, be))
+    #posteriori += math.log(beta.pdf(e, ae, be))
+    return posteriori
+
+def EstimateE_hat(LGDVarDat, af, bf, ae, be, dx=1e-3):
+    max_posteriori, e_hat = -np.inf, 0
+    posterioris = []
+    for i, e in enumerate(np.arange(dx,1,dx)):
+        posteriori = ComputeLikelihoodEhat(LGDVarDat, e, af, bf, ae, be)
+        posterioris.append(posteriori)
         if posteriori > max_posteriori:
-            max_posteriori = posteriori; _alpha = alpha; _beta = beta
-    return max_posteriori, _alpha, _beta
+            max_posteriori = posteriori; e_hat = e
+        #if i % 1000 == 0:
+        #    sys.stdout.write("\r %d computed"%i)
+    return max_posteriori, e_hat, np.arange(dx,1,dx), posterioris 
 
+def TestOneVar(Var, AEBE, Tissue="ADPS"):
+    print(Var.sample)
+    print(Var.gene)
+    AEBE = AEBE[AEBE["tissue"]==Tissue]
+    AE, BE = AEBE["a_hat"].values[0], AEBE["b_hat"].values[0]
+    AFBF = pd.read_csv("/Users/jiayao/Work/BrainDisorders/src/NMD_model/TissueASE/{}.csv".format(Tissue))
+    AFBF = AFBF[AFBF["gene"]==Var.gene]
+    AF, BF = AFBF["ahat"].values[0], AFBF["bhat"].values[0]
+    maxP, e_hat, all_e, allPosts = EstimateE_hat(Var, AF, BF, AE, BE, dx=1e-3)
+    print(maxP, e_hat)
+    plt.plot(all_e, allPosts)
+    plt.show()
+
+def SimpsonQuad(func, start, end, args, steps=100):
+    step_size = (end - start ) / steps
+    res = 0
+    for step in range(steps):
+        x = start + step_size/2
+        _args = tuple([x] + [_ for _ in args])
+        start += step_size
+        h = func(*_args)
+        res += step_size*h
+    return res
+
+def beta_binom_Ehat2(f, e, af, bf, k, n):
+    fprime = P_F_E(f,e)
+    res2 = binom.logpmf(k, n, fprime)
+    #res2 = binom.pmf(k, n, f)
+    res3 = beta.logpdf(f, af, bf)
+    return fprime, res2, res3
+
+def SimpsonQuad2(func, start, end, args, steps=10):
+    step_size = (end - start ) / steps
+    res = 0
+    Dat = []
+    for step in range(steps):
+        x = start #+ step_size/2
+        _args = tuple([x] + [_ for _ in args])
+        start += step_size
+        fp, binom, beta = func(*_args)
+        try:
+            #print(x, math.log(binom), math.log(beta),)
+            #Dat.append([x, fp,  math.log(binom), math.log(beta)])
+            Dat.append([x, fp,  binom, beta])
+        except:
+            #print(x, 0, 0)
+            Dat.append([x, fp, 0, 0])
+        h = binom * beta
+        res += step_size*h
+    return res, Dat
+
+def ComputeLikelihoodEhat2(var, e, af, bf, ae, be):
+    posteriori = 0
+    Kvi, Nvi = var.nalt, var.nref+var.nalt
+    print(Kvi, Nvi)
+    res, Dat = SimpsonQuad2(beta_binom_Ehat2, 0, 1, args=(e, af, bf, Kvi, Nvi))
+    posteriori += math.log(res)
+    #posteriori += math.log(beta.pdf(e, ae, be))
+    return posteriori, Dat
+
+def EstimateE_hat2(LGDVarDat, af, bf, ae, be, dx=1e-3):
+    max_posteriori, e_hat = -np.inf, 0
+    posterioris = []
+    for i, e in enumerate(np.arange(0,1,dx)):
+        #print(e,),
+        posteriori, Dat = ComputeLikelihoodEhat2(LGDVarDat, e, af, bf, ae, be)
+        posterioris.append(posteriori)
+        if posteriori > max_posteriori:
+            max_posteriori = posteriori; e_hat = e
+        #if i % 1000 == 0:
+        #    sys.stdout.write("\r %d computed"%i)
+        #print([e]+ Dat)
+        for x, fp,  bi, be in Dat:
+            print ("%.2f %.2f %.5f %.5f %.5f"%(e, x, fp, bi, be))
+    return max_posteriori, e_hat, np.arange(dx,1,dx), posterioris 
