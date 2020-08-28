@@ -4524,7 +4524,7 @@ def LoadGenesForSVIPSSC():
 ##############################################################################
 def CollectASECount(_file):
     ASE_count_dir = "/Users/jiayao/Work/BrainDisorders/data/GTEx/Andy/INDV/"
-    writer = csv.writer(open("data/GTEX_ASE_SNP.2.tsv", 'wt'), delimiter="\t")
+    writer = csv.writer(open("data/GTEX_ASE_SNP.3.tsv", 'wt'), delimiter="\t")
     for filename in os.listdir(ASE_count_dir):
         if filename.endswith(".pp"):
             reader = csv.reader(open(ASE_count_dir+filename, 'rt'), delimiter="\t")
@@ -4537,8 +4537,8 @@ def CollectASECount(_file):
                 NREF = int(row[11])
                 NALT = int(row[12])
                 #if NREF + NALT >= 8:
-                if DEPTH >= 8:
-                    writer.writerow([SAMPLE, ID, INFO, NREF, NALT])
+                #if DEPTH >= 8:
+                writer.writerow([SAMPLE, ID, INFO, NREF, NALT])
 
 class ASEVar:
     def __init__(self, SAMPLE, ID, INFO, NREF, NALT, GENE):
